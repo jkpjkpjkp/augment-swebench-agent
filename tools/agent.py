@@ -416,8 +416,14 @@ try breaking down the task into smaller steps and call this tool multiple times.
                                 try:
                                     # Use imports from the top of the file
 
-                                    # Load and resize the image if needed
+                                    # Load the image
                                     img = Image.open(view_path)
+
+                                    # Crop to remove black regions
+                                    from utils.image_utils import crop_to_remove_black_regions
+                                    img = crop_to_remove_black_regions(img)
+
+                                    # Resize if needed
                                     max_size = (1500, 1500)
                                     if img.width > max_size[0] or img.height > max_size[1]:
                                         ratio = min(max_size[0] / img.width, max_size[1] / img.height)
@@ -436,7 +442,7 @@ try breaking down the task into smaller steps and call this tool multiple times.
                                     image_list = self.get_image_list(simplified=True)
 
                                     # Create a new user prompt with the image
-                                    prompt = TextPrompt(text=f"Here's the cropped view I requested. Let me analyze it.")
+                                    prompt = TextPrompt(text=f"Here's the cropped view I requested, with any black regions automatically trimmed. Let me analyze it.")
                                     prompt.image_url = img_url
                                     # Add the image to the dialog
                                     self.dialog._message_lists.append([prompt])
@@ -468,8 +474,14 @@ try breaking down the task into smaller steps and call this tool multiple times.
                                 try:
                                     # Use imports from the top of the file
 
-                                    # Load and resize the image if needed
+                                    # Load the image
                                     img = Image.open(view_path)
+
+                                    # Crop to remove black regions
+                                    from utils.image_utils import crop_to_remove_black_regions
+                                    img = crop_to_remove_black_regions(img)
+
+                                    # Resize if needed
                                     max_size = (1500, 1500)
                                     if img.width > max_size[0] or img.height > max_size[1]:
                                         ratio = min(max_size[0] / img.width, max_size[1] / img.height)
@@ -488,7 +500,7 @@ try breaking down the task into smaller steps and call this tool multiple times.
                                     image_list = self.get_image_list(simplified=True)
 
                                     # Create a new user prompt with the image
-                                    prompt = TextPrompt(text=f"I've blacked out this region. Here's the updated image.")
+                                    prompt = TextPrompt(text=f"I've blacked out this region. Here's the updated image, cropped to focus on the remaining non-black areas.")
                                     prompt.image_url = img_url
                                     # Add the image to the dialog
                                     self.dialog._message_lists.append([prompt])
@@ -517,7 +529,63 @@ try breaking down the task into smaller steps and call this tool multiple times.
                             if self.run_logger:
                                 self.run_logger.log_tool_result(tool_result)
 
-                        if self.complete_tool.should_stop:
+                        # Handle the complete tool specially
+                        if tool_call.tool_name == "complete":
+                            # Store the answer but don't immediately terminate
+                            answer = tool_call.tool_input.get("answer", "")
+                            self.logger_for_agent_logs.info(f"Received final answer: {answer}")
+
+                            # Verify the answer consistency
+                            if self.verify_answer_consistency(answer):
+                                # Answer is consistent, proceed with termination
+                                self.logger_for_agent_logs.info("Answer verified as consistent, completing task.")
+                                # Add a fake model response, so the next turn is the user's
+                                # turn in case they want to resume
+                                self.dialog.add_model_response(
+                                    [TextResult(text="Completed the task.")]
+                                )
+                                return ToolImplOutput(
+                                    tool_output=answer,
+                                    tool_result_message="Task completed with verified answer",
+                                )
+                            else:
+                                # Answer is not consistent, revert the complete tool call
+                                self.logger_for_agent_logs.info("Answer not consistent, continuing with analysis.")
+                                # Reset the complete tool
+                                self.complete_tool.reset()
+
+                                # Create a new set of tools excluding the complete tool
+                                tools_without_complete = [tool for tool in self.tools if tool.name != "complete"]
+
+                                # Add a message to the dialog asking for more analysis
+                                self.dialog.add_tool_call_result(
+                                    tool_call,
+                                    "I need you to analyze further before providing a final numeric answer. Remember that your final answer must be a number (integer or float). Please continue your analysis."
+                                )
+
+                                # Get messages for the model
+                                messages = self.dialog.get_messages_for_llm_client()
+
+                                # Get tool parameters for available tools (excluding complete)
+                                tool_params = [tool.get_tool_param() for tool in tools_without_complete]
+
+                                # Call the model again without the complete tool
+                                try:
+                                    model_response, metadata = self.client.generate(
+                                        messages=messages,
+                                        max_tokens=self.max_output_tokens,
+                                        tools=tool_params,
+                                        system_prompt=self._get_system_prompt(),
+                                    )
+                                    self.dialog.add_model_response(model_response)
+
+                                    # Continue with the next turn
+                                    continue
+                                except Exception as e:
+                                    self.logger_for_agent_logs.info(f"Error generating response after reverting complete tool: {str(e)}")
+
+                        # For other tools that might set should_stop
+                        elif self.complete_tool.should_stop:
                             # Add a fake model response, so the next turn is the user's
                             # turn in case they want to resume
                             self.dialog.add_model_response(
@@ -605,8 +673,14 @@ try breaking down the task into smaller steps and call this tool multiple times.
             try:
                 # Use imports from the top of the file
 
-                # Load and resize the image if needed
+                # Load the image
                 img = Image.open(initial_image_path)
+
+                # Crop to remove black regions
+                from utils.image_utils import crop_to_remove_black_regions
+                img = crop_to_remove_black_regions(img)
+
+                # Resize if needed
                 max_size = (1500, 1500)
                 if img.width > max_size[0] or img.height > max_size[1]:
                     ratio = min(max_size[0] / img.width, max_size[1] / img.height)
@@ -663,6 +737,157 @@ try breaking down the task into smaller steps and call this tool multiple times.
             self.run_logger.finalize_run()
 
         return result
+
+    def verify_answer_consistency(self, answer) -> bool:
+        """Verify the consistency of a numeric answer by making additional calls to the model.
+
+        Args:
+            answer: The numeric answer to verify (int or float)
+
+        Returns:
+            True if the answer is consistent across multiple runs, False otherwise
+        """
+        self.logger_for_agent_logs.info(f"Verifying numeric answer consistency: {answer}")
+
+        # Create a copy of the dialog for verification
+        verification_dialog = deepcopy(self.dialog)
+
+        # Create a verification prompt that includes the original question but excludes image tools
+        verification_prompt = "Based on the information provided so far, what is your final numeric answer to the question? Please provide only a number (integer or float)."
+        verification_dialog.add_user_prompt(verification_prompt)
+
+        # Create a report answer tool (simplified version of complete tool)
+        report_answer_tool = CompleteTool()
+
+        # Track verification answers
+        verification_answers = []
+        consistent_count = 0
+        required_consistent_answers = 2  # Need 2 more consistent answers
+
+        # Make verification calls
+        for i in range(3):  # Try up to 3 times to get consistent answers
+            try:
+                # Get messages for the model
+                messages = verification_dialog.get_messages_for_llm_client()
+
+                # Call the model with only the report answer tool
+                model_response, _ = self.client.generate(
+                    messages=messages,
+                    max_tokens=self.max_output_tokens,
+                    tools=[report_answer_tool.get_tool_param()],
+                    system_prompt=self._get_system_prompt(),
+                )
+
+                # Add the response to the verification dialog
+                verification_dialog.add_model_response(model_response)
+
+                # Check if the model called the report answer tool
+                pending_tool_calls = verification_dialog.get_pending_tool_calls()
+
+                if pending_tool_calls and pending_tool_calls[0].tool_name == "complete":
+                    verification_answer = pending_tool_calls[0].tool_input.get("answer", "")
+                    verification_answers.append(verification_answer)
+
+                    # Log the verification answer
+                    self.logger_for_agent_logs.info(f"Verification answer {i+1}: {verification_answer}")
+
+                    # Check if this answer is consistent with the original
+                    if self._answers_are_consistent(answer, verification_answer):
+                        consistent_count += 1
+                        if consistent_count >= required_consistent_answers:
+                            self.logger_for_agent_logs.info("Answer verified as consistent!")
+                            return True
+
+                    # Add a fake tool result to continue the dialog
+                    verification_dialog.add_tool_call_result(
+                        pending_tool_calls[0],
+                        "Thank you for your answer. Let's verify once more."
+                    )
+                else:
+                    # If the model didn't call the tool, extract text response if any
+                    text_results = [item for item in model_response if isinstance(item, TextResult)]
+                    if text_results:
+                        verification_answer = text_results[0].text
+                        verification_answers.append(verification_answer)
+
+                        # Log the verification answer
+                        self.logger_for_agent_logs.info(f"Verification answer {i+1} (text): {verification_answer}")
+
+                        # Check if this answer is consistent with the original
+                        if self._answers_are_consistent(answer, verification_answer):
+                            consistent_count += 1
+                            if consistent_count >= required_consistent_answers:
+                                self.logger_for_agent_logs.info("Answer verified as consistent!")
+                                return True
+
+                    # Add a prompt to continue verification
+                    verification_dialog.add_user_prompt("Please provide your final numeric answer using the complete tool. Your answer must be a number (integer or float).")
+            except Exception as e:
+                self.logger_for_agent_logs.info(f"Error during verification: {str(e)}")
+
+        # If we get here, we didn't get enough consistent answers
+        self.logger_for_agent_logs.info("Answer verification failed. Answers were not consistent.")
+        return False
+
+    def _answers_are_consistent(self, answer1, answer2) -> bool:
+        """Check if two numeric answers are consistent.
+
+        This implementation handles numeric comparisons with appropriate tolerance for floating-point values.
+
+        Args:
+            answer1: First answer (numeric or string representation of a number)
+            answer2: Second answer (numeric or string representation of a number)
+
+        Returns:
+            True if the answers are consistent, False otherwise
+        """
+        # Convert string answers to numeric values if needed
+        try:
+            num1 = self._convert_to_numeric(answer1)
+            num2 = self._convert_to_numeric(answer2)
+
+            # If both are integers, they should match exactly
+            if isinstance(num1, int) and isinstance(num2, int):
+                return num1 == num2
+
+            # For floating point values, use a relative tolerance
+            # This handles cases where the same calculation might have small floating-point differences
+            rel_tol = 1e-9  # Relative tolerance for floating-point comparison
+            abs_tol = 1e-9  # Absolute tolerance for values close to zero
+
+            return abs(num1 - num2) <= max(rel_tol * max(abs(num1), abs(num2)), abs_tol)
+        except (ValueError, TypeError):
+            # If conversion fails, fall back to string comparison
+            self.logger_for_agent_logs.info(f"Numeric comparison failed, falling back to string comparison")
+            if isinstance(answer1, str) and isinstance(answer2, str):
+                return answer1.strip() == answer2.strip()
+            return str(answer1).strip() == str(answer2).strip()
+
+    def _convert_to_numeric(self, value):
+        """Convert a value to a numeric type (int or float).
+
+        Args:
+            value: The value to convert (can be a string, int, or float)
+
+        Returns:
+            The numeric value as int or float
+
+        Raises:
+            ValueError: If the value cannot be converted to a number
+        """
+        if isinstance(value, (int, float)):
+            return value
+
+        if isinstance(value, str):
+            value = value.strip()
+            try:
+                # Try to convert to int first
+                return int(value)
+            except ValueError:
+                # If that fails, try float
+                return float(value)
+
+        raise ValueError(f"Cannot convert {value} to a numeric value")
 
     def clear(self):
         self.dialog.clear()

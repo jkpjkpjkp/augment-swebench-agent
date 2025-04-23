@@ -27,7 +27,7 @@ I've loaded an image for you to analyze. Consider the following question about t
 
 Can you help me analyze this image and answer the question?
 
-Your task is to thoroughly investigate the image to provide the most accurate answer to the question.
+Your task is to thoroughly investigate the image to answer the question extremely accurately.
 
 Example steps:
 1. Create views (crops) of specific regions of interest in the image
@@ -36,10 +36,11 @@ Example steps:
 4. Only report a final answer when you are absolutely sure based on your analysis.
 
 TIPS:
-- Be methodical in your analysis, examining the image section by section
-- Create multiple views to focus on different parts of the image
-- Be detailed in your descriptions of what you see in each view
-- But only report relavent information to the question
 - Zoom in by repeatedly cropping, until you have a very clear view of the region of interest
-- If you are done with an image, black it out before switching to another one. This helps you keep track of which parts of the image you have already analyzed.
+- Create multiple crops to focus on different parts of the image
+- Examine the image section by section
+- Combine examinations and analyze
+- Be detailed in your descriptions of what you see in each view
+- But only report information relavent to the question
+- If you are done with a part, black it out before switching to another one. This helps you keep track of which parts of the image you have already analyzed.
 """
