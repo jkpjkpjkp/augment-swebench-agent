@@ -1,12 +1,20 @@
 from copy import deepcopy
-from typing import Any, Optional
+import logging
+import re
+from io import BytesIO
 from pathlib import Path
+from typing import Any, Optional
+
+import base64
+from PIL import Image
+from rich.console import Console
+
 from utils.common import (
     DialogMessages,
     LLMTool,
     ToolImplOutput,
 )
-from utils.llm_client import LLMClient, TextResult
+from utils.llm_client import LLMClient, TextResult, TextPrompt
 from utils.workspace_manager import WorkspaceManager
 from utils.run_logger import RunLogger
 from utils.text_cleaner import clean_tool_result
@@ -20,8 +28,6 @@ from tools.image_tools import (
     BlackoutTool,
     AddImageTool,
 )
-from rich.console import Console
-import logging
 
 
 class Agent(LLMTool):
@@ -222,8 +228,17 @@ try breaking down the task into smaller steps and call this tool multiple times.
                     raise ValueError(f"Tool {sorted_names[i]} is duplicated")
 
             try:
-                model_response, _metadata = self.client.generate(  # Metadata is unused
-                    messages=self.dialog.get_messages_for_llm_client(),
+                # Get the messages to send to the model
+                messages = self.dialog.get_messages_for_llm_client()
+
+                # Get the current image path if available
+                current_image_path = None
+                if self.last_image_path:
+                    current_image_path = self.last_image_path
+
+                # Call the model
+                model_response, metadata = self.client.generate(
+                    messages=messages,
                     max_tokens=self.max_output_tokens,
                     tools=tool_params,
                     system_prompt=self._get_system_prompt(),
@@ -237,6 +252,15 @@ try breaking down the task into smaller steps and call this tool multiple times.
                     if text_results:
                         response_text = text_results[0].text
                         self.run_logger.log_model_response(response_text)
+
+                    # Log the MLLM call with all details
+                    images = [current_image_path] if current_image_path else []
+                    self.run_logger.log_mllm_call(
+                        messages=messages,
+                        model_response=model_response,
+                        metadata=metadata,
+                        images=images
+                    )
 
                 # Handle tool calls
                 pending_tool_calls = self.dialog.get_pending_tool_calls()
@@ -336,10 +360,6 @@ try breaking down the task into smaller steps and call this tool multiple times.
                             tool_result = result
 
                         # Handle different tool types and send appropriate images
-                        from utils.llm_client import TextPrompt
-                        import re
-                        from pathlib import Path
-
                         # Extract image path from tool result if present
 
                         # For switch_image tool
@@ -394,9 +414,7 @@ try breaking down the task into smaller steps and call this tool multiple times.
 
                                 # Load the image and send it to the model
                                 try:
-                                    from PIL import Image
-                                    import base64
-                                    from io import BytesIO
+                                    # Use imports from the top of the file
 
                                     # Load and resize the image if needed
                                     img = Image.open(view_path)
@@ -448,9 +466,7 @@ try breaking down the task into smaller steps and call this tool multiple times.
 
                                 # Load the image and send it to the model
                                 try:
-                                    from PIL import Image
-                                    import base64
-                                    from io import BytesIO
+                                    # Use imports from the top of the file
 
                                     # Load and resize the image if needed
                                     img = Image.open(view_path)
@@ -587,10 +603,7 @@ try breaking down the task into smaller steps and call this tool multiple times.
         # If an initial image is provided, include it with the first message
         if initial_image_path is not None and not resume:
             try:
-                from utils.llm_client import TextPrompt
-                from PIL import Image
-                import base64
-                from io import BytesIO
+                # Use imports from the top of the file
 
                 # Load and resize the image if needed
                 img = Image.open(initial_image_path)

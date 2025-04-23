@@ -1,0 +1,21 @@
+{
+  "call_id": 1,
+  "timestamp": "2025-04-23 14:06:29",
+  "messages": [
+    [
+      {
+        "type": "text_prompt",
+        "text": "Test message"
+      }
+    ]
+  ],
+  "model_response": [
+    {
+      "type": "text_result",
+      "text": "Test response"
+    }
+  ],
+  "metadata": {
+    "test": "metadata"
+  }
+}

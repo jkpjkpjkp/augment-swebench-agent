@@ -12,7 +12,7 @@ import re
 import shutil
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 
 from PIL import Image
 from rich.console import Console
@@ -49,6 +49,13 @@ class RunLogger:
 
         self.conversations_dir = self.run_dir / "conversations"
         self.conversations_dir.mkdir(exist_ok=True)
+
+        # Create directory for MLLM call logs
+        self.mllm_calls_dir = self.run_dir / "mllm_calls"
+        self.mllm_calls_dir.mkdir(exist_ok=True)
+
+        # Counter for MLLM calls
+        self.mllm_call_counter = 0
 
         # Set up logging
         self.logger = logging.getLogger(f"agent_run_{self.run_id}")
@@ -158,12 +165,34 @@ class RunLogger:
             color: #666;
             margin-top: 5px;
         }}
+        .mllm-calls {{
+            margin-top: 20px;
+            padding: 10px;
+            background-color: #f9f9f9;
+            border-radius: 5px;
+            border: 1px solid #ddd;
+        }}
+        .mllm-call-link {{
+            display: block;
+            margin: 5px 0;
+            color: #0066cc;
+            text-decoration: none;
+        }}
+        .mllm-call-link:hover {{
+            text-decoration: underline;
+        }}
     </style>
 </head>
 <body>
     <div class="container">
         <h1>Agent Run: {self.run_id}</h1>
         <p>Started at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</p>
+        <div class="mllm-calls">
+            <h2>MLLM Calls</h2>
+            <div id="mllm-call-links">
+                <!-- MLLM call links will be added here -->
+            </div>
+        </div>
         <div id="conversation">
             <!-- Conversation turns will be added here -->
         </div>
@@ -249,6 +278,21 @@ class RunLogger:
             full_html,
             flags=re.DOTALL
         )
+
+        # Update the MLLM call links if needed
+        if hasattr(self, 'mllm_call_links') and self.mllm_call_links:
+            mllm_links_html = ""
+            for call_id, call_info in self.mllm_call_links.items():
+                relative_path = os.path.relpath(call_info['html_path'], self.run_dir)
+                timestamp = call_info['timestamp']
+                mllm_links_html += f'<a class="mllm-call-link" href="{relative_path}" target="_blank">Call #{call_id} - {timestamp}</a>\n'
+
+            updated_html = re.sub(
+                r'<div id="mllm-call-links">.*?</div>',
+                f'<div id="mllm-call-links">\n{mllm_links_html}</div>',
+                updated_html,
+                flags=re.DOTALL
+            )
 
         with open(html_file, "w") as f:
             f.write(updated_html)
@@ -457,6 +501,9 @@ class RunLogger:
         """
         if isinstance(obj, Path):
             return str(obj)
+        elif hasattr(obj, 'to_dict') and callable(obj.to_dict):
+            # Handle DataClassJsonMixin objects like TextPrompt
+            return self._make_json_serializable(obj.to_dict())
         elif isinstance(obj, dict):
             return {k: self._make_json_serializable(v) for k, v in obj.items()}
         elif isinstance(obj, list):
@@ -476,6 +523,257 @@ class RunLogger:
 
         self.logger.info(f"Saved conversation log to {json_path}")
         return json_path
+
+    def log_mllm_call(self, messages, model_response, metadata=None, images=None):
+        """Log a multimodal language model call.
+
+        Args:
+            messages: The messages sent to the model
+            model_response: The response from the model
+            metadata: Optional metadata about the call
+            images: Optional list of image paths that were sent to the model
+        """
+        # Increment the call counter
+        self.mllm_call_counter += 1
+        call_id = self.mllm_call_counter
+        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+        # Create a directory for this call
+        call_dir = self.mllm_calls_dir / f"call_{call_id}"
+        call_dir.mkdir(exist_ok=True)
+
+        # Save the raw data
+        call_data = {
+            "call_id": call_id,
+            "timestamp": timestamp,
+            "messages": self._make_json_serializable(messages),
+            "model_response": self._make_json_serializable(model_response),
+            "metadata": self._make_json_serializable(metadata) if metadata else {}
+        }
+
+        # Save images if provided
+        if images:
+            call_images_dir = call_dir / "images"
+            call_images_dir.mkdir(exist_ok=True)
+            image_paths = []
+
+            for i, img_path in enumerate(images):
+                if img_path and Path(img_path).exists():
+                    dest_path = call_images_dir / f"image_{i}{Path(img_path).suffix}"
+                    shutil.copy2(img_path, dest_path)
+                    image_paths.append(str(dest_path))
+
+            call_data["images"] = image_paths
+
+        # Save the call data as JSON
+        json_path = call_dir / "call_data.json"
+        with open(json_path, "w") as f:
+            json.dump(call_data, f, indent=2)
+
+        # Generate HTML for this call
+        html_path = self._generate_mllm_call_html(call_id, call_data, call_dir)
+
+        # Initialize mllm_call_links if it doesn't exist
+        if not hasattr(self, 'mllm_call_links'):
+            self.mllm_call_links = {}
+
+        # Add to the list of MLLM call links
+        self.mllm_call_links[call_id] = {
+            "html_path": html_path,
+            "timestamp": timestamp
+        }
+
+        # Update the main HTML file
+        self._update_html()
+
+        self.logger.info(f"Logged MLLM call #{call_id}")
+        return call_id, html_path
+
+    def _generate_mllm_call_html(self, call_id, call_data, call_dir):
+        """Generate HTML for a specific MLLM call.
+
+        Args:
+            call_id: The ID of the call
+            call_data: The call data
+            call_dir: The directory for this call
+
+        Returns:
+            Path to the generated HTML file
+        """
+        html_path = call_dir / "call.html"
+        timestamp = call_data.get("timestamp", datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
+
+        # Start building the HTML content
+        html_content = f"""<!DOCTYPE html>
+<html>
+<head>
+    <title>MLLM Call #{call_id} - {self.run_id}</title>
+    <style>
+        body {{
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }}
+        .container {{
+            max-width: 1200px;
+            margin: 0 auto;
+            background-color: white;
+            padding: 20px;
+            border-radius: 5px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+        }}
+        h1, h2, h3 {{
+            color: #333;
+        }}
+        .section {{
+            margin-bottom: 30px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            padding: 15px;
+        }}
+        .message {{
+            background-color: #e6f7ff;
+            padding: 10px;
+            border-radius: 5px;
+            margin-bottom: 10px;
+        }}
+        .response {{
+            background-color: #f0f0f0;
+            padding: 10px;
+            border-radius: 5px;
+            margin-bottom: 10px;
+        }}
+        pre {{
+            background-color: #f5f5f5;
+            padding: 10px;
+            border-radius: 3px;
+            overflow-x: auto;
+        }}
+        img {{
+            max-width: 100%;
+            height: auto;
+            border: 1px solid #ddd;
+            margin: 10px 0;
+        }}
+        .image-container {{
+            text-align: center;
+            margin: 15px 0;
+        }}
+        .image-container img {{
+            max-height: 400px;
+        }}
+        .metadata {{
+            font-size: 0.8em;
+            color: #666;
+            margin-top: 5px;
+        }}
+        .back-link {{
+            display: block;
+            margin-bottom: 20px;
+            color: #0066cc;
+            text-decoration: none;
+        }}
+        .back-link:hover {{
+            text-decoration: underline;
+        }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <a href="../index.html" class="back-link">← Back to Run Summary</a>
+        <h1>MLLM Call #{call_id}</h1>
+        <p>Timestamp: {timestamp}</p>
+"""
+
+        # Add images section if there are images
+        if "images" in call_data and call_data["images"]:
+            html_content += "<div class=\"section\">\n"
+            html_content += "<h2>Images</h2>\n"
+            for img_path in call_data["images"]:
+                relative_path = os.path.relpath(img_path, call_dir)
+                html_content += f'<div class="image-container">\n'
+                html_content += f'<img src="{relative_path}" alt="Image sent to model">\n'
+                html_content += f'<div class="metadata">Image: {os.path.basename(img_path)}</div>\n'
+                html_content += '</div>\n'
+            html_content += "</div>\n"
+
+        # Add messages section
+        html_content += "<div class=\"section\">\n"
+        html_content += "<h2>Messages</h2>\n"
+
+        # Format messages
+        if "messages" in call_data:
+            messages = call_data["messages"]
+            for i, message_list in enumerate(messages):
+                role = "User" if i % 2 == 0 else "Assistant"
+                html_content += f"<h3>{role} Turn</h3>\n"
+
+                for message in message_list:
+                    message_type = message.get("type", "unknown")
+                    if message_type == "text_prompt":
+                        html_content += '<div class="message">\n'
+                        text = message.get("text", "").replace("\n", "<br>")
+                        html_content += f"<p>{text}</p>\n"
+                        html_content += '</div>\n'
+                    elif message_type == "text_result":
+                        html_content += '<div class="response">\n'
+                        text = message.get("text", "").replace("\n", "<br>")
+                        html_content += f"<p>{text}</p>\n"
+                        html_content += '</div>\n'
+                    elif message_type == "tool_call":
+                        html_content += '<div class="message">\n'
+                        html_content += f"<h4>Tool Call: {message.get('tool_name', 'Unknown')}</h4>\n"
+                        html_content += '<pre>\n'
+                        html_content += json.dumps(message.get("tool_input", {}), indent=2)
+                        html_content += '\n</pre>\n'
+                        html_content += '</div>\n'
+                    elif message_type == "tool_result":
+                        html_content += '<div class="response">\n'
+                        html_content += f"<h4>Tool Result</h4>\n"
+                        text = message.get("tool_output", "").replace("\n", "<br>")
+                        html_content += f"<p>{text}</p>\n"
+                        html_content += '</div>\n'
+                    else:
+                        html_content += '<div class="message">\n'
+                        html_content += f"<pre>{json.dumps(message, indent=2)}</pre>\n"
+                        html_content += '</div>\n'
+        html_content += "</div>\n"
+
+        # Add model response section
+        html_content += "<div class=\"section\">\n"
+        html_content += "<h2>Model Response</h2>\n"
+        if "model_response" in call_data:
+            model_response = call_data["model_response"]
+            html_content += '<div class="response">\n'
+            html_content += '<pre>\n'
+            html_content += json.dumps(model_response, indent=2)
+            html_content += '\n</pre>\n'
+            html_content += '</div>\n'
+        html_content += "</div>\n"
+
+        # Add metadata section
+        html_content += "<div class=\"section\">\n"
+        html_content += "<h2>Metadata</h2>\n"
+        if "metadata" in call_data and call_data["metadata"]:
+            html_content += '<pre>\n'
+            html_content += json.dumps(call_data["metadata"], indent=2)
+            html_content += '\n</pre>\n'
+        else:
+            html_content += "<p>No metadata available</p>\n"
+        html_content += "</div>\n"
+
+        # Close the HTML
+        html_content += """    </div>
+</body>
+</html>
+"""
+
+        # Write the HTML file
+        with open(html_path, "w") as f:
+            f.write(html_content)
+
+        return html_path
 
     def finalize_run(self, summary: Optional[str] = None):
         """Finalize the run, saving all logs and generating a summary.
