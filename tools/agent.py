@@ -1,5 +1,6 @@
 from copy import deepcopy
 from typing import Any, Optional
+from pathlib import Path
 from tools.bash_tool import create_bash_tool, create_docker_bash_tool
 from utils.common import (
     DialogMessages,
@@ -66,6 +67,10 @@ try breaking down the task into smaller steps and call this tool multiple times.
         ask_user_permission: bool = False,
         docker_container_id: Optional[str] = None,
     ):
+        # Track the last image sent to the model
+        self.last_image_path = None
+        # Track the image paths that have been processed
+        self.processed_images = set()
         """Initialize the agent.
 
         Args:
@@ -215,7 +220,119 @@ try breaking down the task into smaller steps and call this tool multiple times.
                         else:
                             tool_result = result
 
-                        self.dialog.add_tool_call_result(tool_call, tool_result)
+                        # Handle different tool types and send appropriate images
+                        from utils.llm_client import TextPrompt
+                        import re
+                        from pathlib import Path
+
+                        # Extract image path from tool result if present
+                        image_path_match = None
+
+                        # For select_image tool
+                        if tool_call.tool_name == "select_image":
+                            # Extract the image URL from the tool result
+                            image_url_match = re.search(r"Image URL: (data:image/[^\n]+)", tool_result)
+                            # Also extract the image path
+                            path_match = re.search(r"Selected image at ([^\n]+)", tool_result)
+                            if path_match:
+                                image_path = Path(path_match.group(1))
+                                self.last_image_path = image_path
+
+                            if image_url_match:
+                                image_url = image_url_match.group(1)
+                                # Create a new user prompt with the image
+                                prompt = TextPrompt(text=f"I'm analyzing this image to count the geese.")
+                                prompt.image_url = image_url
+                                # Add the image to the dialog
+                                self.dialog._message_lists.append([prompt])
+                                # Now add the tool result
+                                self.dialog.add_tool_call_result(tool_call, tool_result)
+                            else:
+                                # Just add the regular tool result
+                                self.dialog.add_tool_call_result(tool_call, tool_result)
+
+                        # For crop_image tool
+                        elif tool_call.tool_name == "crop_image":
+                            # Extract the new view path
+                            path_match = re.search(r"Created new view at ([^\n]+)", tool_result)
+                            if path_match:
+                                view_path = Path(path_match.group(1))
+                                self.last_image_path = view_path
+
+                                # Load the image and send it to the model
+                                try:
+                                    from PIL import Image
+                                    import base64
+                                    from io import BytesIO
+
+                                    # Load and resize the image if needed
+                                    img = Image.open(view_path)
+                                    max_size = (1500, 1500)
+                                    if img.width > max_size[0] or img.height > max_size[1]:
+                                        ratio = min(max_size[0] / img.width, max_size[1] / img.height)
+                                        new_size = (int(img.width * ratio), int(img.height * ratio))
+                                        img = img.resize(new_size, Image.LANCZOS)
+
+                                    # Convert to base64
+                                    buffered = BytesIO()
+                                    img.save(buffered, format="PNG")
+                                    img_base64 = base64.b64encode(buffered.getvalue()).decode("utf-8")
+                                    img_url = f"data:image/png;base64,{img_base64}"
+
+                                    # Create a new user prompt with the image
+                                    prompt = TextPrompt(text=f"Here's the cropped view I requested. Let me analyze it.")
+                                    prompt.image_url = img_url
+                                    # Add the image to the dialog
+                                    self.dialog._message_lists.append([prompt])
+                                except Exception as e:
+                                    print(f"Error processing cropped image: {str(e)}")
+
+                            # Add the tool result
+                            self.dialog.add_tool_call_result(tool_call, tool_result)
+
+                        # For blackout_image tool
+                        elif tool_call.tool_name == "blackout_image":
+                            # Extract the blacked out view path
+                            path_match = re.search(r"Blacked out (view|image) at ([^\n]+)", tool_result)
+                            if path_match:
+                                view_path = Path(path_match.group(2))
+                                self.last_image_path = view_path
+
+                                # Load the image and send it to the model
+                                try:
+                                    from PIL import Image
+                                    import base64
+                                    from io import BytesIO
+
+                                    # Load and resize the image if needed
+                                    img = Image.open(view_path)
+                                    max_size = (1500, 1500)
+                                    if img.width > max_size[0] or img.height > max_size[1]:
+                                        ratio = min(max_size[0] / img.width, max_size[1] / img.height)
+                                        new_size = (int(img.width * ratio), int(img.height * ratio))
+                                        img = img.resize(new_size, Image.LANCZOS)
+
+                                    # Convert to base64
+                                    buffered = BytesIO()
+                                    img.save(buffered, format="PNG")
+                                    img_base64 = base64.b64encode(buffered.getvalue()).decode("utf-8")
+                                    img_url = f"data:image/png;base64,{img_base64}"
+
+                                    # Create a new user prompt with the image
+                                    prompt = TextPrompt(text=f"I've blacked out this region. Here's the updated image.")
+                                    prompt.image_url = img_url
+                                    # Add the image to the dialog
+                                    self.dialog._message_lists.append([prompt])
+                                except Exception as e:
+                                    print(f"Error processing blacked out image: {str(e)}")
+
+                            # Add the tool result
+                            self.dialog.add_tool_call_result(tool_call, tool_result)
+
+                        # For all other tools
+                        else:
+                            # Just add the tool result
+                            self.dialog.add_tool_call_result(tool_call, tool_result)
 
                         if self.complete_tool.should_stop:
                             # Add a fake model response, so the next turn is the user's
@@ -272,6 +389,7 @@ try breaking down the task into smaller steps and call this tool multiple times.
         instruction: str,
         resume: bool = False,
         orientation_instruction: str | None = None,
+        initial_image_path: Path | None = None,
     ) -> str:
         """Start a new agent run.
 
@@ -279,6 +397,8 @@ try breaking down the task into smaller steps and call this tool multiple times.
             instruction: The instruction to the agent.
             resume: Whether to resume the agent from the previous state,
                 continuing the dialog.
+            orientation_instruction: Optional orientation instruction.
+            initial_image_path: Optional path to an initial image to include with the first message.
 
         Returns:
             A tuple of (result, message).
@@ -289,14 +409,60 @@ try breaking down the task into smaller steps and call this tool multiple times.
         else:
             self.dialog.clear()
             self.interrupted = False
+            self.last_image_path = None
+            self.processed_images.clear()
 
-        tool_input = {
-            "instruction": instruction,
-        }
+        # If an initial image is provided, include it with the first message
+        if initial_image_path is not None and not resume:
+            try:
+                from utils.llm_client import TextPrompt
+                from PIL import Image
+                import base64
+                from io import BytesIO
+
+                # Load and resize the image if needed
+                img = Image.open(initial_image_path)
+                max_size = (1500, 1500)
+                if img.width > max_size[0] or img.height > max_size[1]:
+                    ratio = min(max_size[0] / img.width, max_size[1] / img.height)
+                    new_size = (int(img.width * ratio), int(img.height * ratio))
+                    img = img.resize(new_size, Image.LANCZOS)
+
+                # Convert to base64
+                buffered = BytesIO()
+                img.save(buffered, format="PNG")
+                img_base64 = base64.b64encode(buffered.getvalue()).decode("utf-8")
+                img_url = f"data:image/png;base64,{img_base64}"
+
+                # Create a prompt with the image and instruction
+                prompt = TextPrompt(text=instruction)
+                prompt.image_url = img_url
+
+                # Add the prompt to the dialog
+                self.dialog.add_user_prompt("")
+                self.dialog._message_lists[-1] = [prompt]
+
+                # Store the image path
+                self.last_image_path = initial_image_path
+                self.processed_images.add(str(initial_image_path))
+
+                # Return early since we've already added the instruction with the image
+                tool_input = {"instruction": ""}
+            except Exception as e:
+                print(f"Error including initial image: {str(e)}")
+                # Fall back to normal instruction without image
+                tool_input = {"instruction": instruction}
+        else:
+            # Normal instruction without image
+            tool_input = {"instruction": instruction}
+
         if orientation_instruction:
             tool_input["orientation_instruction"] = orientation_instruction
+
         return self.run(tool_input, self.dialog)
 
     def clear(self):
         self.dialog.clear()
         self.interrupted = False
+        self.last_image_path = None
+        self.processed_images.clear()

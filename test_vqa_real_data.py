@@ -198,9 +198,12 @@ def main():
         pr_description=task_data['question'],
     )
 
-    # Run the agent
+    # Run the agent with the initial image
     logger.info(f"Starting agent with instruction:\n{instruction}\n")
-    result = agent.run_agent(instruction)
+    result = agent.run_agent(
+        instruction=instruction,
+        initial_image_path=image_path  # Pass the image path to include with the first message
+    )
 
     # Print the result
     console.print(f"\n[bold]Agent Result:[/bold]\n{result}")

@@ -653,10 +653,13 @@ class GeminiDirectClient(LLMClient):
 
         # Process message lists
         for idx, message_list in enumerate(messages):
-            if len(message_list) > 1:
-                raise ValueError("Only one entry per message supported for Gemini via OpenAI")
+            # Handle multiple messages in a list by processing only the last one
+            # This is a workaround for Gemini via OpenAI which doesn't support multiple entries per message
+            # if len(message_list) > 1:
+            #     print(f"Warning: Multiple entries in message list {idx}, using only the last one")
 
-            augment_message = message_list[0]
+            # Use the last message in the list
+            augment_message = message_list[-1]
 
             # Handle different message types
             if str(type(augment_message)) == str(TextPrompt):

@@ -321,15 +321,18 @@ It returns information about the selected image, including its size and path.
                 img_url = f"data:image/png;base64,{img_base64}"
 
                 # Add the image to the dialog
-                if dialog_messages is not None:
-                    # Create a new prompt with the image
-                    prompt = TextPrompt(text=f"I'm analyzing this image to count the geese. Image size: {size[0]}x{size[1]}")
-                    prompt.image_url = img_url
-                    dialog_messages.add_user_message([prompt])
+                # Note: We're not adding the image to the dialog messages directly
+                # because the DialogMessages class doesn't have an add_user_message method
+                # Instead, we'll return the image URL in the tool output
+                # and let the agent handle it
+
+                # Create a message about the image
+                image_message = f"Selected image at {image_path}\nSize: {size[0]}x{size[1]}\nImage URL: {img_url}"
 
                 return ToolImplOutput(
                     tool_output=f"Selected image at {image_path}\n"
-                               f"Size: {size[0]}x{size[1]}",
+                               f"Size: {size[0]}x{size[1]}\n"
+                               f"Image URL: {img_url}",
                     tool_result_message=f"Selected image at {image_path}",
                 )
             except Exception as e:
