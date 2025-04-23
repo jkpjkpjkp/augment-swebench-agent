@@ -9,8 +9,6 @@ Available Image Tools:
 - select_image: Select an entire image or view for analysis
 - blackout_image: Black out a view to mark it as analyzed
 
-NOTE: A list of all images and views in the workspace is automatically included in every message.
-
 Guidelines:
 - Analyze images carefully by creating views (crops) of important regions
 - Mark regions as analyzed by blacking them out when you're done with them

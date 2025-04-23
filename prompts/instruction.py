@@ -22,14 +22,12 @@ Follow these steps to analyze the image:
 3. Create views (crops) of specific regions of interest in the image
 4. Analyze each view in detail and describe what you see
 5. Mark regions as analyzed by blacking them out when you're done with them
-6. Provide a comprehensive answer to the question based on your analysis
+6. Provide an accurate answer to the question based on your analysis
 
 Available Image Tools:
 - select_image: Select an image or view to get information about it
 - crop_image: Create a new view by cropping with coordinates (x1, y1, x2, y2)
 - blackout_image: Black out a view to mark it as analyzed
-
-NOTE: A list of all images and views in the workspace is automatically included in every message.
 
 TIPS:
 - Be methodical in your analysis, examining the image section by section

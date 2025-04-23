@@ -29,7 +29,7 @@ from utils.image_utils import (
     highlight_region,
     get_image_size,
 )
-from PIL import Image
+from PIL import Image, ImageDraw
 
 
 class CropTool(LLMTool):
@@ -116,7 +116,18 @@ The coordinates are in pixels, with (0, 0) being the top-left corner of the imag
 
         image_path = Path(image_path)
 
-        if not image_path.is_absolute():
+        # Check if this is a view ID rather than a path
+        path_str = str(image_path)
+        view_found = False
+
+        # Try to find a view with this ID
+        for img_path, views in self.image_manager.image_views.items():
+            if path_str in views:
+                image_path = views[path_str].view_path
+                view_found = True
+                break
+
+        if not view_found and not image_path.is_absolute():
             # Try different possible paths
             possible_paths = [
                 image_path,  # As is
@@ -263,7 +274,18 @@ It returns information about the selected image, including its size and path.
 
         image_path = Path(image_path)
 
-        if not image_path.is_absolute():
+        # Check if this is a view ID rather than a path
+        path_str = str(image_path)
+        view_found = False
+
+        # Try to find a view with this ID
+        for img_path, views in self.image_manager.image_views.items():
+            if path_str in views:
+                image_path = views[path_str].view_path
+                view_found = True
+                break
+
+        if not view_found and not image_path.is_absolute():
             # Try different possible paths
             possible_paths = [
                 image_path,  # As is
@@ -383,6 +405,22 @@ and all other views that overlap with the blacked-out region.
                 "type": "string",
                 "description": "Path to the image or view to black out.",
             },
+            "x1": {
+                "type": "integer",
+                "description": "Optional X coordinate of the top-left corner of the region to black out.",
+            },
+            "y1": {
+                "type": "integer",
+                "description": "Optional Y coordinate of the top-left corner of the region to black out.",
+            },
+            "x2": {
+                "type": "integer",
+                "description": "Optional X coordinate of the bottom-right corner of the region to black out.",
+            },
+            "y2": {
+                "type": "integer",
+                "description": "Optional Y coordinate of the bottom-right corner of the region to black out.",
+            },
         },
         "required": ["image_path"],
     }
@@ -422,7 +460,18 @@ and all other views that overlap with the blacked-out region.
 
         image_path = Path(image_path)
 
-        if not image_path.is_absolute():
+        # Check if this is a view ID rather than a path
+        path_str = str(image_path)
+        view_found = False
+
+        # Try to find a view with this ID
+        for img_path, views in self.image_manager.image_views.items():
+            if path_str in views:
+                image_path = views[path_str].view_path
+                view_found = True
+                break
+
+        if not view_found and not image_path.is_absolute():
             # Try different possible paths
             possible_paths = [
                 image_path,  # As is
@@ -448,36 +497,139 @@ and all other views that overlap with the blacked-out region.
                     tool_result_message=f"Error: Image not found at {image_path}",
                 )
 
-            # Check if this is a view
-            is_view = image_path.parent == self.image_manager.views_dir
+            # Check if coordinates are provided for partial blackout
+            x1 = tool_input.get("x1")
+            y1 = tool_input.get("y1")
+            x2 = tool_input.get("x2")
+            y2 = tool_input.get("y2")
 
-            if is_view:
-                # Black out the view
-                updated_paths = self.image_manager.blackout_view(image_path)
-
-                return ToolImplOutput(
-                    tool_output=f"Blacked out view at {image_path}\n"
-                               f"Updated {len(updated_paths)} images/views",
-                    tool_result_message=f"Blacked out view at {image_path}",
-                )
-            else:
-                # It's an original image, create a black image of the same size
+            # If coordinates are provided, black out just that region
+            if x1 is not None and y1 is not None and x2 is not None and y2 is not None:
+                # Load the image
                 img = load_image(image_path)
-                black_img = Image.new('RGB', img.size, (0, 0, 0))
-                save_image(black_img, image_path)
 
-                # Update all views of this image
-                for view_id, view in self.image_manager.image_views.get(image_path, {}).items():
-                    black_view = Image.new('RGB', (
-                        view.coordinates[2] - view.coordinates[0],
-                        view.coordinates[3] - view.coordinates[1]
-                    ), (0, 0, 0))
-                    save_image(black_view, view.view_path)
+                # Create a black rectangle for the specified region
+                draw = ImageDraw.Draw(img)
+                draw.rectangle([(x1, y1), (x2, y2)], fill=(0, 0, 0))
 
-                return ToolImplOutput(
-                    tool_output=f"Blacked out image at {image_path} and all its views",
-                    tool_result_message=f"Blacked out image at {image_path}",
-                )
+                # Save the image
+                save_image(img, image_path)
+
+                # Check if this is a view
+                is_view = image_path.parent == self.image_manager.views_dir
+
+                if is_view:
+                    # Find the original image and update it
+                    for img_path, views in self.image_manager.image_views.items():
+                        for v_id, v in views.items():
+                            if v.view_path == image_path:
+                                # Found the view
+                                # Adjust coordinates relative to the original image
+                                orig_x1 = v.coordinates[0] + x1
+                                orig_y1 = v.coordinates[1] + y1
+                                orig_x2 = v.coordinates[0] + x2
+                                orig_y2 = v.coordinates[1] + y2
+
+                                # Load the original image
+                                orig_img = load_image(img_path)
+
+                                # Create a black rectangle for the specified region
+                                draw = ImageDraw.Draw(orig_img)
+                                draw.rectangle([(orig_x1, orig_y1), (orig_x2, orig_y2)], fill=(0, 0, 0))
+
+                                # Save the original image
+                                save_image(orig_img, img_path)
+
+                                # Update all other views that overlap with this region
+                                for other_v_id, other_v in views.items():
+                                    if other_v.view_path != image_path:
+                                        # Check if this view overlaps with the blacked out region
+                                        other_x1, other_y1, other_x2, other_y2 = other_v.coordinates
+
+                                        # Check for overlap
+                                        if (orig_x1 < other_x2 and orig_x2 > other_x1 and
+                                            orig_y1 < other_y2 and orig_y2 > other_y1):
+                                            # There's overlap, update this view
+                                            other_img = load_image(other_v.view_path)
+
+                                            # Calculate the overlapping region in this view's coordinates
+                                            overlap_x1 = max(0, orig_x1 - other_x1)
+                                            overlap_y1 = max(0, orig_y1 - other_y1)
+                                            overlap_x2 = min(other_x2 - other_x1, orig_x2 - other_x1)
+                                            overlap_y2 = min(other_y2 - other_y1, orig_y2 - other_y1)
+
+                                            # Create a black rectangle for the overlapping region
+                                            draw = ImageDraw.Draw(other_img)
+                                            draw.rectangle([(overlap_x1, overlap_y1), (overlap_x2, overlap_y2)], fill=(0, 0, 0))
+
+                                            # Save the view
+                                            save_image(other_img, other_v.view_path)
+                                break
+
+                    return ToolImplOutput(
+                        tool_output=f"Blacked out region ({x1}, {y1}, {x2}, {y2}) in view at {image_path}",
+                        tool_result_message=f"Blacked out region in view at {image_path}",
+                    )
+                else:
+                    # It's an original image, update all views that overlap with this region
+                    for view_id, view in self.image_manager.image_views.get(image_path, {}).items():
+                        # Check if this view overlaps with the blacked out region
+                        view_x1, view_y1, view_x2, view_y2 = view.coordinates
+
+                        # Check for overlap
+                        if (x1 < view_x2 and x2 > view_x1 and y1 < view_y2 and y2 > view_y1):
+                            # There's overlap, update this view
+                            view_img = load_image(view.view_path)
+
+                            # Calculate the overlapping region in this view's coordinates
+                            overlap_x1 = max(0, x1 - view_x1)
+                            overlap_y1 = max(0, y1 - view_y1)
+                            overlap_x2 = min(view_x2 - view_x1, x2 - view_x1)
+                            overlap_y2 = min(view_y2 - view_y1, y2 - view_y1)
+
+                            # Create a black rectangle for the overlapping region
+                            draw = ImageDraw.Draw(view_img)
+                            draw.rectangle([(overlap_x1, overlap_y1), (overlap_x2, overlap_y2)], fill=(0, 0, 0))
+
+                            # Save the view
+                            save_image(view_img, view.view_path)
+
+                    return ToolImplOutput(
+                        tool_output=f"Blacked out region ({x1}, {y1}, {x2}, {y2}) in image at {image_path}",
+                        tool_result_message=f"Blacked out region in image at {image_path}",
+                    )
+            else:
+                # No coordinates provided, black out the entire image/view
+                # Check if this is a view
+                is_view = image_path.parent == self.image_manager.views_dir
+
+                if is_view:
+                    # Black out the view
+                    updated_paths = self.image_manager.blackout_view(image_path)
+
+                    return ToolImplOutput(
+                        tool_output=f"Blacked out view at {image_path}\n"
+                                   f"Updated {len(updated_paths)} images/views",
+                        tool_result_message=f"Blacked out view at {image_path}",
+                    )
+                else:
+                    # It's an original image, create a black image of the same size
+                    img = load_image(image_path)
+                    black_img = Image.new('RGB', img.size, (0, 0, 0))
+                    save_image(black_img, image_path)
+
+                    # Update all views of this image
+                    for view_id, view in self.image_manager.image_views.get(image_path, {}).items():
+                        black_view = Image.new('RGB', (
+                            view.coordinates[2] - view.coordinates[0],
+                            view.coordinates[3] - view.coordinates[1]
+                        ), (0, 0, 0))
+                        save_image(black_view, view.view_path)
+
+                    return ToolImplOutput(
+                        tool_output=f"Blacked out image at {image_path} and all its views",
+                        tool_result_message=f"Blacked out image at {image_path}",
+                    )
 
         except Exception as e:
             return ToolImplOutput(

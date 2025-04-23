@@ -88,3 +88,4 @@ TIPS:
 
 (Current token count: 681)
 
+Agent result: Agent interrupted by user
