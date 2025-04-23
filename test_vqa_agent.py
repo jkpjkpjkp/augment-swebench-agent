@@ -133,7 +133,6 @@ def main():
 
     # Format the instruction using the template
     instruction = INSTRUCTION_PROMPT.format(
-        location=workspace_path,
         pr_description=vqa_task,
     )
 

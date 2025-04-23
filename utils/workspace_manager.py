@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
 
 class WorkspaceManager:
@@ -31,3 +31,15 @@ class WorkspaceManager:
         if self.container_workspace and path.is_relative_to(self.root):
             return self.container_workspace / path.relative_to(self.root)
         return path
+
+    def list_images(self) -> List[Path]:
+        """List all images in the workspace.
+
+        Returns:
+            A list of paths to images in the workspace
+        """
+        images_dir = self.root / "images"
+        if not images_dir.exists():
+            return []
+
+        return list(images_dir.glob("*"))

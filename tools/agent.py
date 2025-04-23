@@ -18,7 +18,6 @@ from tools.image_tools import (
     SelectTool,
     BlackoutTool,
     AddImageTool,
-    ListImagesTool,
 )
 from termcolor import colored
 from rich.console import Console
@@ -126,14 +125,50 @@ try breaking down the task into smaller steps and call this tool multiple times.
             SelectTool(workspace_manager=workspace_manager),
             BlackoutTool(workspace_manager=workspace_manager),
             AddImageTool(workspace_manager=workspace_manager),
-            ListImagesTool(workspace_manager=workspace_manager),
             self.complete_tool,
         ]
+
+        # Initialize the image manager for listing images
+        from utils.image_manager import ImageManager
+        self.image_manager = ImageManager(workspace_manager.root)
+
+        # Initialize a counter for consecutive identical tool calls
+        self.consecutive_identical_tool_calls = 0
+        self.last_tool_name = None
+
+    def get_image_list(self) -> str:
+        """Get a formatted list of all images and views in the workspace.
+
+        Returns:
+            A string containing the list of images and views
+        """
+        images = self.image_manager.list_images()
+
+        if not images:
+            return "No images found in the workspace."
+
+        result = "Images in workspace:\n"
+
+        from utils.image_utils import get_image_size
+
+        for img_path in images:
+            size = get_image_size(img_path)
+            result += f"- {img_path.name} ({size[0]}x{size[1]})\n"
+
+            # Add views for this image
+            views = self.image_manager.list_views(img_path)
+            if views:
+                result += "  Views:\n"
+                for view_path in views:
+                    view_info = self.image_manager.get_view_info(view_path)
+                    result += f"  - {view_path.name} ({view_info['size'][0]}x{view_info['size'][1]}) - Coordinates: {view_info['coordinates']}\n"
+
+        return result
 
     def run_impl(
         self,
         tool_input: dict[str, Any],
-        dialog_messages: Optional[DialogMessages] = None,
+        _dialog_messages: Optional[DialogMessages] = None,  # Unused parameter
     ) -> ToolImplOutput:
         instruction = tool_input["instruction"]
 
@@ -142,8 +177,13 @@ try breaking down the task into smaller steps and call this tool multiple times.
 
         # print("Agent starting with instruction:", instruction)
 
+        # Get the list of images
+        image_list = self.get_image_list()
+
         # Add instruction to dialog before getting mode
-        self.dialog.add_user_prompt(instruction)
+        # Append the image list to the instruction
+        full_instruction = f"{instruction}\n\n{image_list}"
+        self.dialog.add_user_prompt(full_instruction)
         self.interrupted = False
 
         remaining_turns = self.max_turns
@@ -170,7 +210,7 @@ try breaking down the task into smaller steps and call this tool multiple times.
                     raise ValueError(f"Tool {sorted_names[i]} is duplicated")
 
             try:
-                model_response, metadata = self.client.generate(
+                model_response, _metadata = self.client.generate(  # Metadata is unused
                     messages=self.dialog.get_messages_for_llm_client(),
                     max_tokens=self.max_output_tokens,
                     tools=tool_params,
@@ -189,6 +229,9 @@ try breaking down the task into smaller steps and call this tool multiple times.
                         tool_result_message="Task completed",
                     )
 
+                # Log the pending tool calls
+                self.logger_for_agent_logs.info(f"Pending tool calls: {[call.tool_name for call in pending_tool_calls]}")
+
                 # Handle multiple tool calls per turn (for Gemini model)
                 for tool_call in pending_tool_calls:
                     text_results = [
@@ -206,26 +249,44 @@ try breaking down the task into smaller steps and call this tool multiple times.
                         self.recent_tool_calls.pop(0)  # Remove oldest call
 
                     # If we've called the same tool multiple times in a row, try a different approach
-                    if len(self.recent_tool_calls) == self.max_recent_calls and \
+                    if len(self.recent_tool_calls) >= 3 and \
                        all(call == self.recent_tool_calls[0] for call in self.recent_tool_calls):
-                        print(f"Detected a loop of {self.max_recent_calls} identical tool calls: {tool_call.tool_name}")
+                        print(f"Detected a loop of {len(self.recent_tool_calls)} identical tool calls: {tool_call.tool_name}")
                         print("Breaking out of the loop by forcing a different tool call...")
 
-                        # If we're stuck in a list_images loop, try select_image instead
-                        if tool_call.tool_name == "list_images":
-                            print("Forcing a select_image call on the first available image")
-                            # Find the select_image tool
-                            select_tool = next((t for t in self.tools if t.name == "select_image"), None)
-                            if select_tool and self.workspace_manager.list_images():
+                        # If we're stuck in a select_image loop, try crop_image instead
+                        if tool_call.tool_name == "select_image":
+                            # Create a crop of the image to break the loop
+                            crop_tool = next((t for t in self.tools if t.name == "crop_image"), None)
+                            if crop_tool and self.workspace_manager.list_images():
                                 first_image = self.workspace_manager.list_images()[0]
-                                result = select_tool.run_impl({
-                                    "image_path": str(first_image)
+                                result = crop_tool.run_impl({
+                                    "image_path": str(first_image),
+                                    "view_id": "region_1",
+                                    "x1": 0,
+                                    "y1": 0,
+                                    "x2": 1000,  # Use a reasonable default size
+                                    "y2": 1000
                                 })
                                 tool_result = result.tool_output
                                 self.dialog.add_tool_call_result(tool_call, tool_result)
                                 # Reset the loop detection
                                 self.recent_tool_calls = []
                                 continue
+
+                        # Reset the loop detection
+                        self.recent_tool_calls = []
+
+                    # Special handling for list_images tool which has been removed
+                    if tool_call.tool_name == "list_images":
+                        # Instead of raising an error, just return the image list
+                        print("Handling list_images tool call with direct image list")
+                        image_list = self.get_image_list()
+                        tool_result = image_list
+                        self.dialog.add_tool_call_result(tool_call, tool_result)
+                        # Reset the loop detection
+                        self.recent_tool_calls = []
+                        continue
 
                     try:
                         tool = next(t for t in self.tools if t.name == tool_call.tool_name)
@@ -256,7 +317,6 @@ try breaking down the task into smaller steps and call this tool multiple times.
                         from pathlib import Path
 
                         # Extract image path from tool result if present
-                        image_path_match = None
 
                         # For select_image tool
                         if tool_call.tool_name == "select_image":
@@ -269,8 +329,11 @@ try breaking down the task into smaller steps and call this tool multiple times.
                             # Check if we have aux_data with the image URL
                             if hasattr(result, 'aux_data') and result.aux_data and 'image_url' in result.aux_data:
                                 image_url = result.aux_data['image_url']
+                                # Get the list of images
+                                image_list = self.get_image_list()
+
                                 # Create a new user prompt with the image
-                                prompt = TextPrompt(text=f"I'm analyzing this image to count the geese.")
+                                prompt = TextPrompt(text=f"I'm analyzing this image.\n\n{image_list}")
                                 prompt.image_url = image_url
                                 # Add the image to the dialog
                                 self.dialog._message_lists.append([prompt])
@@ -310,8 +373,11 @@ try breaking down the task into smaller steps and call this tool multiple times.
                                     # Log a message without the full base64 string
                                     print(f"Created image URL for cropped view (base64 data omitted)")
 
+                                    # Get the list of images
+                                    image_list = self.get_image_list()
+
                                     # Create a new user prompt with the image
-                                    prompt = TextPrompt(text=f"Here's the cropped view I requested. Let me analyze it.")
+                                    prompt = TextPrompt(text=f"Here's the cropped view I requested. Let me analyze it.\n\n{image_list}")
                                     prompt.image_url = img_url
                                     # Add the image to the dialog
                                     self.dialog._message_lists.append([prompt])
@@ -351,8 +417,11 @@ try breaking down the task into smaller steps and call this tool multiple times.
                                     # Log a message without the full base64 string
                                     print(f"Created image URL for blacked out view (base64 data omitted)")
 
+                                    # Get the list of images
+                                    image_list = self.get_image_list()
+
                                     # Create a new user prompt with the image
-                                    prompt = TextPrompt(text=f"I've blacked out this region. Here's the updated image.")
+                                    prompt = TextPrompt(text=f"I've blacked out this region. Here's the updated image.\n\n{image_list}")
                                     prompt.image_url = img_url
                                     # Add the image to the dialog
                                     self.dialog._message_lists.append([prompt])
@@ -469,8 +538,11 @@ try breaking down the task into smaller steps and call this tool multiple times.
                 # Log a message without the full base64 string
                 print(f"Created image URL for initial image (base64 data omitted)")
 
+                # Get the list of images
+                image_list = self.get_image_list()
+
                 # Create a prompt with the image and instruction
-                prompt = TextPrompt(text=instruction)
+                prompt = TextPrompt(text=f"{instruction}\n\n{image_list}")
                 prompt.image_url = img_url
 
                 # Add the prompt to the dialog

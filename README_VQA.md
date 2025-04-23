@@ -59,15 +59,9 @@ Black out an image or view, marking it as analyzed.
 }
 ```
 
-### 5. List Images Tool (`list_images`)
+### Note on Image Listing
 
-List all images and views in the workspace.
-
-```
-{
-  "show_views": true
-}
-```
+A list of all images and views in the workspace is automatically included in every message, so there's no need for a separate tool to list images.
 
 ## Workflow Example
 
