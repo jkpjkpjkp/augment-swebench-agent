@@ -594,11 +594,212 @@ class OpenAIDirectClient(LLMClient):
         return augment_messages, message_metadata
 
 
+class GeminiDirectClient(LLMClient):
+    """Use Gemini models via OpenAI API.
+
+    This client is designed to work with Gemini models through OpenAI's API.
+    It's specifically tailored for Gemini-2.5-pro-exp and similar models.
+    """
+
+    def __init__(self, model_name: str = "gemini-2.5-pro-exp", max_retries=2):
+        """Initialize the Gemini client via OpenAI API.
+
+        Args:
+            model_name: The name of the Gemini model to use (default: gemini-2.5-pro-exp)
+            max_retries: Maximum number of retries for API calls
+        """
+        api_key = os.getenv("OPENAI_API_KEY")
+        self.client = openai.OpenAI(
+            api_key=api_key,
+            max_retries=1,
+        )
+        self.model_name = model_name
+        self.max_retries = max_retries
+
+    def generate(
+        self,
+        messages: LLMMessages,
+        max_tokens: int,
+        system_prompt: str | None = None,
+        temperature: float = 0.0,
+        tools: list[ToolParam] = [],
+        tool_choice: dict[str, str] | None = None,
+        thinking_tokens: int | None = None,
+    ) -> Tuple[list[AssistantContentBlock], dict[str, Any]]:
+        """Generate responses using Gemini models via OpenAI API.
+
+        Args:
+            messages: A list of messages
+            max_tokens: The maximum number of tokens to generate
+            system_prompt: A system prompt
+            temperature: The temperature
+            tools: A list of tools
+            tool_choice: A tool choice
+            thinking_tokens: Not used for Gemini
+
+        Returns:
+            A tuple of (generated response, metadata)
+        """
+        assert thinking_tokens is None, "Thinking tokens not supported for Gemini"
+
+        # Convert messages to OpenAI format
+        openai_messages = []
+
+        # Add system prompt if provided
+        if system_prompt is not None:
+            system_message = {"role": "system", "content": system_prompt}
+            openai_messages.append(system_message)
+
+        # Process message lists
+        for idx, message_list in enumerate(messages):
+            if len(message_list) > 1:
+                raise ValueError("Only one entry per message supported for Gemini via OpenAI")
+
+            augment_message = message_list[0]
+
+            # Handle different message types
+            if str(type(augment_message)) == str(TextPrompt):
+                augment_message = cast(TextPrompt, augment_message)
+                openai_message = {"role": "user", "content": augment_message.text}
+                openai_messages.append(openai_message)
+            elif str(type(augment_message)) == str(TextResult):
+                augment_message = cast(TextResult, augment_message)
+                openai_message = {"role": "assistant", "content": augment_message.text}
+                openai_messages.append(openai_message)
+            elif str(type(augment_message)) == str(ToolCall):
+                augment_message = cast(ToolCall, augment_message)
+                tool_call = {
+                    "id": augment_message.tool_call_id,
+                    "type": "function",
+                    "function": {
+                        "name": augment_message.tool_name,
+                        "arguments": json.dumps(augment_message.tool_input),
+                    },
+                }
+                openai_message = {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [tool_call],
+                }
+                openai_messages.append(openai_message)
+            elif str(type(augment_message)) == str(ToolFormattedResult):
+                augment_message = cast(ToolFormattedResult, augment_message)
+                openai_message = {
+                    "role": "tool",
+                    "tool_call_id": augment_message.tool_call_id,
+                    "content": augment_message.tool_output,
+                }
+                openai_messages.append(openai_message)
+            else:
+                raise ValueError(f"Unknown message type: {type(augment_message)}")
+
+        # Convert tools to OpenAI format
+        openai_tools = []
+        for tool in tools:
+            tool_def = {
+                "name": tool.name,
+                "description": tool.description,
+                "parameters": tool.input_schema,
+            }
+            openai_tool_object = {
+                "type": "function",
+                "function": tool_def,
+            }
+            openai_tools.append(openai_tool_object)
+
+        # Handle tool_choice
+        if tool_choice is None:
+            tool_choice_param = OpenAI_NOT_GIVEN
+        elif tool_choice["type"] == "any":
+            tool_choice_param = "required"
+        elif tool_choice["type"] == "auto":
+            tool_choice_param = "auto"
+        elif tool_choice["type"] == "tool":
+            tool_choice_param = {
+                "type": "function",
+                "function": {"name": tool_choice["name"]},
+            }
+        else:
+            raise ValueError(f"Unknown tool_choice type: {tool_choice['type']}")
+
+        # Make API call with retries
+        response = None
+        for retry in range(self.max_retries):
+            try:
+                response = self.client.chat.completions.create(
+                    model=self.model_name,
+                    messages=openai_messages,
+                    temperature=temperature,
+                    tools=openai_tools if len(openai_tools) > 0 else OpenAI_NOT_GIVEN,
+                    tool_choice=tool_choice_param,
+                    max_tokens=max_tokens,
+                )
+                break
+            except (
+                OpenAI_APIConnectionError,
+                OpenAI_InternalServerError,
+                OpenAI_RateLimitError,
+            ) as e:
+                if retry == self.max_retries - 1:
+                    print(f"Failed Gemini request after {retry + 1} retries")
+                    raise e
+                else:
+                    print(f"Retrying Gemini request: {retry + 1}/{self.max_retries}")
+                    # Sleep with jitter to avoid thundering herd
+                    time.sleep(5 * random.uniform(0.8, 1.2))
+
+        # Convert response back to Augment format
+        augment_messages = []
+        assert response is not None
+
+        # Get the first choice (we only support one response)
+        if len(response.choices) > 1:
+            print("Warning: Multiple choices returned, using only the first one")
+
+        openai_response_message = response.choices[0].message
+        tool_calls = openai_response_message.tool_calls
+        content = openai_response_message.content
+
+        # Handle tool calls or text content
+        if tool_calls:
+            for tool_call in tool_calls:
+                try:
+                    # Parse the JSON string into a dictionary
+                    tool_input = json.loads(tool_call.function.arguments)
+                except json.JSONDecodeError as e:
+                    print(f"Failed to parse tool arguments: {tool_call.function.arguments}")
+                    raise ValueError(f"Invalid JSON in tool arguments: {str(e)}") from e
+
+                augment_messages.append(
+                    ToolCall(
+                        tool_name=tool_call.function.name,
+                        tool_input=tool_input,
+                        tool_call_id=tool_call.id,
+                    )
+                )
+        elif content is not None:
+            augment_messages.append(TextResult(text=content))
+        else:
+            raise ValueError("Neither tool_calls nor content present in response")
+
+        # Prepare metadata
+        assert response.usage is not None
+        message_metadata = {
+            "raw_response": response,
+            "input_tokens": response.usage.prompt_tokens,
+            "output_tokens": response.usage.completion_tokens,
+        }
+
+        return augment_messages, message_metadata
+
+
 def get_client(client_name: str, **kwargs) -> LLMClient:
     """Get a client for a given client name."""
     if client_name == "anthropic-direct":
         return AnthropicDirectClient(**kwargs)
     elif client_name == "openai-direct":
         return OpenAIDirectClient(**kwargs)
+    elif client_name == "gemini-direct":
+        return GeminiDirectClient(**kwargs)
     else:
         raise ValueError(f"Unknown client name: {client_name}")

@@ -4,6 +4,7 @@ jsonschema>=4.23.0
 numpy>=2.2.4
 openai==1.59.*
 pexpect>=4.9.0
+pillow>=10.0.0
 prompt-toolkit>=3.0.50
 pytest==7.4.3
 rich>=13.9.4
