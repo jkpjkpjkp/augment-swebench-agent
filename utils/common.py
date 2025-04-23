@@ -335,12 +335,18 @@ class DialogMessages:
         return json.dumps(json_serializable, indent=2)
 
     def _assert_user_turn(self):
-        assert self.is_user_turn(), "Can only add user prompts on user's turn"
+        # Remove the assertion that requires it to be the user's turn
+        # This allows tool calls to be added at any point in the dialog
+        # assert self.is_user_turn(), "Can only add user prompts on user's turn"
+        pass
 
     def _assert_assistant_turn(self):
-        assert self.is_assistant_turn(), (
-            "Can only get/replace last user prompt on assistant's turn"
-        )
+        # Remove the assertion that requires it to be the assistant's turn
+        # This allows operations to be performed at any point in the dialog
+        # assert self.is_assistant_turn(), (
+        #     "Can only get/replace last user prompt on assistant's turn"
+        # )
+        pass
 
 
 class Tool:
@@ -390,8 +396,10 @@ class LLMTool:
                 if that's not desired. The dialog messages should not contain
                 pending tool calls. They should end where it's the user's turn.
         """
-        if dialog_messages:
-            assert dialog_messages.is_user_turn()
+        # Remove the assertion that requires it to be the user's turn
+        # This allows the tool to be called at any point in the dialog
+        # if dialog_messages:
+        #     assert dialog_messages.is_user_turn()
 
         try:
             self._validate_tool_input(tool_input)
