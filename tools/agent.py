@@ -71,6 +71,9 @@ try breaking down the task into smaller steps and call this tool multiple times.
         self.last_image_path = None
         # Track the image paths that have been processed
         self.processed_images = set()
+        # Track recent tool calls to detect loops
+        self.recent_tool_calls = []
+        self.max_recent_calls = 5
         """Initialize the agent.
 
         Args:
@@ -196,6 +199,33 @@ try breaking down the task into smaller steps and call this tool multiple times.
                         self.logger_for_agent_logs.info(
                             f"Top-level agent planning next step: {text_result.text}\n",
                         )
+
+                    # Check for repetitive tool calls (loop detection)
+                    self.recent_tool_calls.append(tool_call.tool_name)
+                    if len(self.recent_tool_calls) > self.max_recent_calls:
+                        self.recent_tool_calls.pop(0)  # Remove oldest call
+
+                    # If we've called the same tool multiple times in a row, try a different approach
+                    if len(self.recent_tool_calls) == self.max_recent_calls and \
+                       all(call == self.recent_tool_calls[0] for call in self.recent_tool_calls):
+                        print(f"Detected a loop of {self.max_recent_calls} identical tool calls: {tool_call.tool_name}")
+                        print("Breaking out of the loop by forcing a different tool call...")
+
+                        # If we're stuck in a list_images loop, try select_image instead
+                        if tool_call.tool_name == "list_images":
+                            print("Forcing a select_image call on the first available image")
+                            # Find the select_image tool
+                            select_tool = next((t for t in self.tools if t.name == "select_image"), None)
+                            if select_tool and self.workspace_manager.list_images():
+                                first_image = self.workspace_manager.list_images()[0]
+                                result = select_tool.run_impl({
+                                    "image_path": str(first_image)
+                                })
+                                tool_result = result.tool_output
+                                self.dialog.add_tool_call_result(tool_call, tool_result)
+                                # Reset the loop detection
+                                self.recent_tool_calls = []
+                                continue
 
                     try:
                         tool = next(t for t in self.tools if t.name == tool_call.tool_name)
@@ -471,3 +501,4 @@ try breaking down the task into smaller steps and call this tool multiple times.
         self.interrupted = False
         self.last_image_path = None
         self.processed_images.clear()
+        self.recent_tool_calls.clear()
