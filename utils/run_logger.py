@@ -623,6 +623,30 @@ class RunLogger:
             border-radius: 5px;
             box-shadow: 0 2px 5px rgba(0,0,0,0.1);
         }}
+        .raw-data {{
+            background-color: #f8f8f8;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            padding: 15px;
+            margin: 10px 0;
+            overflow-x: auto;
+            font-family: monospace;
+            white-space: pre-wrap;
+            max-height: 500px;
+            overflow-y: auto;
+        }}
+        .raw-data-toggle {{
+            background-color: #007bff;
+            color: white;
+            border: none;
+            padding: 8px 15px;
+            border-radius: 4px;
+            cursor: pointer;
+            margin-bottom: 10px;
+        }}
+        .raw-data-toggle:hover {{
+            background-color: #0056b3;
+        }}
         h1, h2, h3 {{
             color: #333;
         }}
@@ -684,6 +708,19 @@ class RunLogger:
         <a href="../index.html" class="back-link">← Back to Run Summary</a>
         <h1>MLLM Call #{call_id}</h1>
         <p>Timestamp: {timestamp}</p>
+
+        <script>
+            function toggleRawData(id) {{
+                const element = document.getElementById(id);
+                if (element.style.display === 'none' || element.style.display === '') {{
+                    element.style.display = 'block';
+                    document.getElementById(id + '-toggle').textContent = 'Hide Raw Data';
+                }} else {{
+                    element.style.display = 'none';
+                    document.getElementById(id + '-toggle').textContent = 'Show Raw Data';
+                }}
+            }}
+        </script>
 """
 
         # Add images section if there are images
@@ -740,9 +777,21 @@ class RunLogger:
                         html_content += '</div>\n'
         html_content += "</div>\n"
 
-        # Add model response section
+        # Add raw input section (messages history)
         html_content += "<div class=\"section\">\n"
-        html_content += "<h2>Model Response</h2>\n"
+        html_content += "<h2>Raw Input (Messages History)</h2>\n"
+        html_content += '<button id="raw-input-toggle" class="raw-data-toggle" onclick="toggleRawData(\'raw-input\')">Show Raw Data</button>\n'
+        if "messages" in call_data:
+            html_content += '<div id="raw-input" class="raw-data" style="display: none;">\n'
+            html_content += '<pre>\n'
+            html_content += json.dumps(call_data["messages"], indent=2)
+            html_content += '\n</pre>\n'
+            html_content += '</div>\n'
+        html_content += "</div>\n"
+
+        # Add model response section with formatted view
+        html_content += "<div class=\"section\">\n"
+        html_content += "<h2>Model Response (Formatted)</h2>\n"
         if "model_response" in call_data:
             model_response = call_data["model_response"]
             html_content += '<div class="response">\n'
@@ -752,16 +801,24 @@ class RunLogger:
             html_content += '</div>\n'
         html_content += "</div>\n"
 
-        # Add metadata section
+        # Add raw output section (complete model output)
         html_content += "<div class=\"section\">\n"
-        html_content += "<h2>Metadata</h2>\n"
-        if "metadata" in call_data and call_data["metadata"]:
+        html_content += "<h2>Raw Model Output</h2>\n"
+        html_content += '<button id="raw-output-toggle" class="raw-data-toggle" onclick="toggleRawData(\'raw-output\')">Show Raw Data</button>\n'
+        if "model_response" in call_data and "metadata" in call_data:
+            html_content += '<div id="raw-output" class="raw-data" style="display: none;">\n'
             html_content += '<pre>\n'
-            html_content += json.dumps(call_data["metadata"], indent=2)
+            # Combine model response and metadata for complete raw output
+            raw_output = {
+                "model_response": call_data["model_response"],
+                "metadata": call_data["metadata"]
+            }
+            html_content += json.dumps(raw_output, indent=2)
             html_content += '\n</pre>\n'
-        else:
-            html_content += "<p>No metadata available</p>\n"
+            html_content += '</div>\n'
         html_content += "</div>\n"
+
+        # Metadata is now included in the raw output section
 
         # Close the HTML
         html_content += """    </div>

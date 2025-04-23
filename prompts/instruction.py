@@ -8,7 +8,7 @@ Available Image Tools:
 - switch_image: View a different crop. The tool description will show a list of available crops you have made
 
 Guidelines:
-- Analyze images carefully by creating views (crops) of important regions
+- Analyze images carefully by creating views (crops) of important regions within each quadrant
 - Mark regions as analyzed by blacking them out when you're done with them
 - So if you see black regions in image, it's only because you have already analyzed them and taken notes
 - Be detailed and precise in your descriptions of what you see in the images
@@ -30,10 +30,12 @@ Can you help me analyze this image and answer the question?
 Your task is to thoroughly investigate the image to answer the question extremely accurately.
 
 Example steps:
-1. Create views (crops) of specific regions of interest in the image
-2. Analyze each view in detail and jot down information related to the <question>
-3. Mark regions as analyzed by blacking them out
-4. Only report a final answer when you are absolutely sure based on your analysis.
+0. Zoom-in (cut away unrelated area)
+1. dividing complex images into multiple parts is ALWAYS a good idea
+2. you may divide them into equal parts, or one-by-one black out objects of interest
+3. Analyze each view in detail and jot down information related to the <question>
+4. Mark regions as analyzed by blacking them out
+5. Only report a final answer when you are absolutely sure based on your analysis.
 
 TIPS:
 - Zoom in by repeatedly cropping, until you have a very clear view of the region of interest
