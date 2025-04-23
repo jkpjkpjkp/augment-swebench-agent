@@ -230,16 +230,15 @@ try breaking down the task into smaller steps and call this tool multiple times.
 
                         # For select_image tool
                         if tool_call.tool_name == "select_image":
-                            # Extract the image URL from the tool result
-                            image_url_match = re.search(r"Image URL: (data:image/[^\n]+)", tool_result)
-                            # Also extract the image path
+                            # Extract the image path
                             path_match = re.search(r"Selected image at ([^\n]+)", tool_result)
                             if path_match:
                                 image_path = Path(path_match.group(1))
                                 self.last_image_path = image_path
 
-                            if image_url_match:
-                                image_url = image_url_match.group(1)
+                            # Check if we have aux_data with the image URL
+                            if hasattr(result, 'aux_data') and result.aux_data and 'image_url' in result.aux_data:
+                                image_url = result.aux_data['image_url']
                                 # Create a new user prompt with the image
                                 prompt = TextPrompt(text=f"I'm analyzing this image to count the geese.")
                                 prompt.image_url = image_url
@@ -278,6 +277,8 @@ try breaking down the task into smaller steps and call this tool multiple times.
                                     img.save(buffered, format="PNG")
                                     img_base64 = base64.b64encode(buffered.getvalue()).decode("utf-8")
                                     img_url = f"data:image/png;base64,{img_base64}"
+                                    # Log a message without the full base64 string
+                                    print(f"Created image URL for cropped view (base64 data omitted)")
 
                                     # Create a new user prompt with the image
                                     prompt = TextPrompt(text=f"Here's the cropped view I requested. Let me analyze it.")
@@ -317,6 +318,8 @@ try breaking down the task into smaller steps and call this tool multiple times.
                                     img.save(buffered, format="PNG")
                                     img_base64 = base64.b64encode(buffered.getvalue()).decode("utf-8")
                                     img_url = f"data:image/png;base64,{img_base64}"
+                                    # Log a message without the full base64 string
+                                    print(f"Created image URL for blacked out view (base64 data omitted)")
 
                                     # Create a new user prompt with the image
                                     prompt = TextPrompt(text=f"I've blacked out this region. Here's the updated image.")
@@ -433,6 +436,8 @@ try breaking down the task into smaller steps and call this tool multiple times.
                 img.save(buffered, format="PNG")
                 img_base64 = base64.b64encode(buffered.getvalue()).decode("utf-8")
                 img_url = f"data:image/png;base64,{img_base64}"
+                # Log a message without the full base64 string
+                print(f"Created image URL for initial image (base64 data omitted)")
 
                 # Create a prompt with the image and instruction
                 prompt = TextPrompt(text=instruction)

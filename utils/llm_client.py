@@ -741,7 +741,31 @@ class GeminiDirectClient(LLMClient):
         for retry in range(self.max_retries):
             try:
                 print(f"Making API call to Gemini model: {self.model_name}")
-                print(f"Messages: {openai_messages}")
+                # Don't print the full messages with base64 images
+                sanitized_messages = []
+                for msg in openai_messages:
+                    if isinstance(msg, dict) and 'content' in msg and isinstance(msg['content'], list):
+                        # Check for image URLs in content
+                        sanitized_content = []
+                        for item in msg['content']:
+                            if isinstance(item, dict) and item.get('type') == 'image_url' and 'image_url' in item:
+                                # Replace the base64 data with a placeholder
+                                if 'url' in item['image_url'] and item['image_url']['url'].startswith('data:image/'):
+                                    sanitized_item = {
+                                        'type': 'image_url',
+                                        'image_url': {'url': '[BASE64_IMAGE_DATA_OMITTED]'}
+                                    }
+                                    sanitized_content.append(sanitized_item)
+                                else:
+                                    sanitized_content.append(item)
+                            else:
+                                sanitized_content.append(item)
+                        sanitized_msg = msg.copy()
+                        sanitized_msg['content'] = sanitized_content
+                        sanitized_messages.append(sanitized_msg)
+                    else:
+                        sanitized_messages.append(msg)
+                print(f"Messages: {sanitized_messages}")
                 response = self.client.chat.completions.create(
                     model=self.model_name,
                     messages=openai_messages,

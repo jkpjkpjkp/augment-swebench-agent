@@ -53,12 +53,12 @@ class ToolImplOutput:
     Attributes:
         tool_output: The main output string that will be shown to the model.
         tool_result_message: A description of what the tool did, for logging purposes.
-        auxiliary_data: Additional data that the tool wants to pass along for logging only.
+        aux_data: Additional data that the tool wants to pass along, such as image URLs.
     """
 
     tool_output: str
     tool_result_message: str
-    auxiliary_data: dict[str, Any] = field(default_factory=dict)
+    aux_data: dict[str, Any] = field(default_factory=dict)
 
 
 class DialogMessages:
@@ -373,6 +373,10 @@ class LLMTool:
     description: str
     input_schema: ToolInputSchema
 
+    def __init__(self):
+        """Initialize the tool."""
+        self._last_result = None
+
     @property
     def should_stop(self) -> bool:
         """Whether the tool wants to stop the current agentic run."""
@@ -405,6 +409,8 @@ class LLMTool:
             self._validate_tool_input(tool_input)
             result = self.run_impl(tool_input, dialog_messages)
             tool_output = result.tool_output
+            # Store the result object for later use
+            self._last_result = result
         except jsonschema.ValidationError as exc:
             tool_output = "Invalid tool input: " + exc.message
         except BadRequestError as exc:

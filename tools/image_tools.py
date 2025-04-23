@@ -319,6 +319,8 @@ It returns information about the selected image, including its size and path.
                 img.save(buffered, format="PNG")
                 img_base64 = base64.b64encode(buffered.getvalue()).decode("utf-8")
                 img_url = f"data:image/png;base64,{img_base64}"
+                # Log a sanitized version without the base64 data
+                print(f"Created image URL for selected image (base64 data omitted)")
 
                 # Add the image to the dialog
                 # Note: We're not adding the image to the dialog messages directly
@@ -329,11 +331,14 @@ It returns information about the selected image, including its size and path.
                 # Create a message about the image
                 image_message = f"Selected image at {image_path}\nSize: {size[0]}x{size[1]}\nImage URL: {img_url}"
 
+                # Store the image URL in a separate variable for the agent to use
+                # but don't include it in the tool output to avoid logging it
                 return ToolImplOutput(
                     tool_output=f"Selected image at {image_path}\n"
                                f"Size: {size[0]}x{size[1]}\n"
-                               f"Image URL: {img_url}",
+                               f"Image URL: [BASE64_IMAGE_DATA_OMITTED]",
                     tool_result_message=f"Selected image at {image_path}",
+                    aux_data={"image_url": img_url}  # Store the actual URL in aux_data
                 )
             except Exception as e:
                 print(f"Error encoding image: {str(e)}")
