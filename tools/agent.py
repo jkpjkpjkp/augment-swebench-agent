@@ -181,72 +181,68 @@ try breaking down the task into smaller steps and call this tool multiple times.
                         tool_result_message="Task completed",
                     )
 
-                if len(pending_tool_calls) > 1:
-                    raise ValueError("Only one tool call per turn is supported")
+                # Handle multiple tool calls per turn (for Gemini model)
+                for tool_call in pending_tool_calls:
+                    text_results = [
+                        item for item in model_response if isinstance(item, TextResult)
+                    ]
+                    if len(text_results) > 0:
+                        text_result = text_results[0]
+                        self.logger_for_agent_logs.info(
+                            f"Top-level agent planning next step: {text_result.text}\n",
+                        )
 
-                assert len(pending_tool_calls) == 1
-                tool_call = pending_tool_calls[0]
+                    try:
+                        tool = next(t for t in self.tools if t.name == tool_call.tool_name)
+                    except StopIteration as exc:
+                        raise ValueError(
+                            f"Tool with name {tool_call.tool_name} not found"
+                        ) from exc
 
-                text_results = [
-                    item for item in model_response if isinstance(item, TextResult)
-                ]
-                if len(text_results) > 0:
-                    text_result = text_results[0]
-                    self.logger_for_agent_logs.info(
-                        f"Top-level agent planning next step: {text_result.text}\n",
-                    )
+                    try:
+                        result = tool.run(tool_call.tool_input, deepcopy(self.dialog))
 
-                try:
-                    tool = next(t for t in self.tools if t.name == tool_call.tool_name)
-                except StopIteration as exc:
-                    raise ValueError(
-                        f"Tool with name {tool_call.tool_name} not found"
-                    ) from exc
+                        tool_input_str = "\n".join(
+                            [f" - {k}: {v}" for k, v in tool_call.tool_input.items()]
+                        )
+                        log_message = f"Calling tool {tool_call.tool_name} with input:\n{tool_input_str}"
+                        log_message += f"\nTool output: \n{result}\n\n"
+                        self.logger_for_agent_logs.info(log_message)
 
-                try:
-                    result = tool.run(tool_call.tool_input, deepcopy(self.dialog))
+                        # Handle both ToolResult objects and tuples
+                        if isinstance(result, tuple):
+                            tool_result, _ = result
+                        else:
+                            tool_result = result
 
-                    tool_input_str = "\n".join(
-                        [f" - {k}: {v}" for k, v in tool_call.tool_input.items()]
-                    )
-                    log_message = f"Calling tool {tool_call.tool_name} with input:\n{tool_input_str}"
-                    log_message += f"\nTool output: \n{result}\n\n"
-                    self.logger_for_agent_logs.info(log_message)
+                        self.dialog.add_tool_call_result(tool_call, tool_result)
 
-                    # Handle both ToolResult objects and tuples
-                    if isinstance(result, tuple):
-                        tool_result, _ = result
-                    else:
-                        tool_result = result
-
-                    self.dialog.add_tool_call_result(tool_call, tool_result)
-
-                    if self.complete_tool.should_stop:
-                        # Add a fake model response, so the next turn is the user's
-                        # turn in case they want to resume
+                        if self.complete_tool.should_stop:
+                            # Add a fake model response, so the next turn is the user's
+                            # turn in case they want to resume
+                            self.dialog.add_model_response(
+                                [TextResult(text="Completed the task.")]
+                            )
+                            return ToolImplOutput(
+                                tool_output=self.complete_tool.answer,
+                                tool_result_message="Task completed",
+                            )
+                    except KeyboardInterrupt:
+                        # Handle interruption during tool execution
+                        self.interrupted = True
+                        interrupt_message = "Tool execution was interrupted by user."
+                        self.dialog.add_tool_call_result(tool_call, interrupt_message)
                         self.dialog.add_model_response(
-                            [TextResult(text="Completed the task.")]
+                            [
+                                TextResult(
+                                    text="Tool execution interrupted by user. You can resume by providing a new instruction."
+                                )
+                            ]
                         )
                         return ToolImplOutput(
-                            tool_output=self.complete_tool.answer,
-                            tool_result_message="Task completed",
+                            tool_output=interrupt_message,
+                            tool_result_message=interrupt_message,
                         )
-                except KeyboardInterrupt:
-                    # Handle interruption during tool execution
-                    self.interrupted = True
-                    interrupt_message = "Tool execution was interrupted by user."
-                    self.dialog.add_tool_call_result(tool_call, interrupt_message)
-                    self.dialog.add_model_response(
-                        [
-                            TextResult(
-                                text="Tool execution interrupted by user. You can resume by providing a new instruction."
-                            )
-                        ]
-                    )
-                    return ToolImplOutput(
-                        tool_output=interrupt_message,
-                        tool_result_message=interrupt_message,
-                    )
 
             except KeyboardInterrupt:
                 # Handle interruption during model generation or other operations

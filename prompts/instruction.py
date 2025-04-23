@@ -1,45 +1,40 @@
 """Instruction Prompt
 
-This prompt is used to instruct the agent on what to do for SWE-bench tasks.
+This prompt is used to instruct the agent on what to do for Visual Question Answering (VQA) tasks.
 
-This forks from the instruction specified in Anthropic's blogpost:
-https://www.anthropic.com/engineering/swe-bench-sonnet.
+It guides the agent to analyze images and answer questions about them using the available image tools.
 """
 
 INSTRUCTION_PROMPT = """
-<images>
-{location}
-</images>
-I've uploaded a python code repository in the directory {location} (not in /tmp/inputs). Consider the following PR description:
+I've loaded an image in the directory {location}. Consider the following question about the image:
 
 <question>
 {pr_description}
 </question>
 
-Can you help me investigate the images in the repository so that the question specified in the <question> is answered?
+Can you help me analyze this image and answer the question?
 
-Your task is to thoroughly investigate the image in the {location} directory to ensure the <question> is most accurately answered.
+Your task is to thoroughly investigate the image in the {location} directory to provide the most accurate answer to the question.
 
-Follow these steps to resolve the issue:
-1. As a first step, it would be a good idea to explore the image to familiarize yourself with its structure.
-3. Use the sequential_thinking tool to plan your fix. Reflect on 5-7 different possible sources of the problem, distill those down to 1-2 most likely sources, and then add logs to validate your assumptions before moving onto implementing the actual code fix
-3.5 Use the cropping tool to zoom in on specific parts of the image.
-4. Edit the image to mark the progress made
-6. Think about edgecases and make sure your solution handles them as well
+Follow these steps to analyze the image:
+1. First, list the images in the workspace to see what's available
+2. Select the image to get basic information about it (size, format, etc.)
+3. Create views (crops) of specific regions of interest in the image
+4. Analyze each view in detail and describe what you see
+5. Mark regions as analyzed by blacking them out when you're done with them
+6. Provide a comprehensive answer to the question based on your analysis
 
-
-GUIDE FOR HOW TO USE "sequential_thinking" TOOL:
-- Your thinking should be thorough and so it's fine if it's very long. Set totalThoughts to at least 5, but setting it up to 25 is fine as well. You'll need more total thoughts when you are considering multiple possible solutions or root causes for an issue.
-- Use this tool as much as you find necessary to improve the quality of your answers.
-- You can run bash commands (like tests, a reproduction script, or 'grep'/'find' to find relevant context) in between thoughts.
-- The sequential_thinking tool can help you break down complex problems, analyze image step-by-step, and ensure a thorough approach to problem-solving.
-- Don't hesitate to use it multiple times throughout your thought process to enhance the depth and accuracy of your solutions.
+Available Image Tools:
+- list_images: List all images and views in the workspace
+- select_image: Select an image or view to get information about it
+- crop_image: Create a new view by cropping with coordinates (x1, y1, x2, y2)
+- blackout_image: Black out a view to mark it as analyzed
 
 TIPS:
-- You must make changes in the {location} directory in order to ensure the requirements specified in the <pr_description> are met. Leaving the directory unchanged is not a valid solution.
-- Do NOT make tool calls inside thoughts passed to sequential_thinking tool. For example, do NOT do this: {{'thought': 'I need to look at the actual implementation of `apps.get_models()` in this version of Django to see if there\'s a bug. Let me check the Django apps module:\n\n<function_calls>\n<invoke name="str_replace_editor">\n<parameter name="command">view</parameter>\n<parameter name="path">django/apps/registry.py</parameter></invoke>', 'path': 'django/apps/registry.py'}}
-- Respect the tool specifications. If a field is required, make sure to provide a value for it. For example "thoughtNumber" is required by the sequential_thinking tool.
-- When you run "ls" with the bash tool, the "view" command with the "str_replace_editor" tool, or variants of those, you may see a symlink like "fileA -> /home/augment/docker/volumes/_data/fileA". You can safely ignore the symlink and just use "fileA" as the path when read, editing, or executing the file.
-- When you need to find information about the codebase, use "grep" and "find" to search for relevant files and code with the bash tool
-- Use your bash tool to set up any necessary environment variables, such as those needed to run tests.
+- Be methodical in your analysis, examining the image section by section
+- Create multiple views to focus on different parts of the image
+- Be detailed in your descriptions of what you see in each view
+- Consider the context and purpose of the image when answering the question
+- If the image contains text, make sure to read and report it accurately
+- When you're done with your analysis, use the complete tool to submit your final answer
 """

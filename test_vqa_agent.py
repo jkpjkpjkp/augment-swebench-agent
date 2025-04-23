@@ -127,8 +127,8 @@ def main():
     # Create a sample VQA task
     vqa_task = """
     Look at the image and identify the colors in each quadrant of the image.
-    Then, create a view for each quadrant and describe the color in that quadrant.
-    Finally, black out the top-left quadrant to mark it as analyzed.
+    What color is in the top-left quadrant? What color is in the top-right quadrant?
+    What color is in the bottom-left quadrant? What color is in the bottom-right quadrant?
     """
 
     # Format the instruction using the template

@@ -9,6 +9,10 @@ This module provides tools for working with images in VQA tasks:
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 import os
+import base64
+from io import BytesIO
+
+from utils.llm_client import TextPrompt
 
 from utils.common import (
     DialogMessages,
@@ -105,8 +109,27 @@ The coordinates are in pixels, with (0, 0) being the top-left corner of the imag
 
         # Resolve the image path
         original_path = image_path
+
+        # If it's already a Path object, convert to string first
+        if isinstance(image_path, Path):
+            image_path = str(image_path)
+
+        image_path = Path(image_path)
+
         if not image_path.is_absolute():
-            image_path = self.workspace_manager.workspace_path(image_path)
+            # Try different possible paths
+            possible_paths = [
+                image_path,  # As is
+                self.workspace_manager.root / image_path,  # Relative to workspace root
+                self.workspace_manager.root / "images" / image_path.name,  # In images directory
+                self.workspace_manager.root / "views" / image_path.name,  # In views directory
+            ]
+
+            # Try each path
+            for path in possible_paths:
+                if path.exists():
+                    image_path = path
+                    break
 
         # Debug output
         print(f"CropTool: Original path: {original_path}, Resolved path: {image_path}")
@@ -233,8 +256,27 @@ It returns information about the selected image, including its size and path.
 
         # Resolve the image path
         original_path = image_path
+
+        # If it's already a Path object, convert to string first
+        if isinstance(image_path, Path):
+            image_path = str(image_path)
+
+        image_path = Path(image_path)
+
         if not image_path.is_absolute():
-            image_path = self.workspace_manager.workspace_path(image_path)
+            # Try different possible paths
+            possible_paths = [
+                image_path,  # As is
+                self.workspace_manager.root / image_path,  # Relative to workspace root
+                self.workspace_manager.root / "images" / image_path.name,  # In images directory
+                self.workspace_manager.root / "views" / image_path.name,  # In views directory
+            ]
+
+            # Try each path
+            for path in possible_paths:
+                if path.exists():
+                    image_path = path
+                    break
 
         # Debug output
         print(f"SelectTool: Original path: {original_path}, Resolved path: {image_path}")
@@ -269,12 +311,34 @@ It returns information about the selected image, including its size and path.
                     # Not a registered view, just return basic info
                     pass
 
-            # Return basic image information
-            return ToolImplOutput(
-                tool_output=f"Selected image at {image_path}\n"
-                           f"Size: {size[0]}x{size[1]}",
-                tool_result_message=f"Selected image at {image_path}",
-            )
+            # Return basic image information and encode the image as base64
+            try:
+                # Load the image and convert to base64
+                img = load_image(image_path)
+                buffered = BytesIO()
+                img.save(buffered, format="PNG")
+                img_base64 = base64.b64encode(buffered.getvalue()).decode("utf-8")
+                img_url = f"data:image/png;base64,{img_base64}"
+
+                # Add the image to the dialog
+                if dialog_messages is not None:
+                    # Create a new prompt with the image
+                    prompt = TextPrompt(text=f"I'm analyzing this image to count the geese. Image size: {size[0]}x{size[1]}")
+                    prompt.image_url = img_url
+                    dialog_messages.add_user_message([prompt])
+
+                return ToolImplOutput(
+                    tool_output=f"Selected image at {image_path}\n"
+                               f"Size: {size[0]}x{size[1]}",
+                    tool_result_message=f"Selected image at {image_path}",
+                )
+            except Exception as e:
+                print(f"Error encoding image: {str(e)}")
+                return ToolImplOutput(
+                    tool_output=f"Selected image at {image_path}\n"
+                               f"Size: {size[0]}x{size[1]}",
+                    tool_result_message=f"Selected image at {image_path}",
+                )
 
         except Exception as e:
             return ToolImplOutput(
@@ -343,8 +407,27 @@ and all other views that overlap with the blacked-out region.
 
         # Resolve the image path
         original_path = image_path
+
+        # If it's already a Path object, convert to string first
+        if isinstance(image_path, Path):
+            image_path = str(image_path)
+
+        image_path = Path(image_path)
+
         if not image_path.is_absolute():
-            image_path = self.workspace_manager.workspace_path(image_path)
+            # Try different possible paths
+            possible_paths = [
+                image_path,  # As is
+                self.workspace_manager.root / image_path,  # Relative to workspace root
+                self.workspace_manager.root / "images" / image_path.name,  # In images directory
+                self.workspace_manager.root / "views" / image_path.name,  # In views directory
+            ]
+
+            # Try each path
+            for path in possible_paths:
+                if path.exists():
+                    image_path = path
+                    break
 
         # Debug output
         print(f"BlackoutTool: Original path: {original_path}, Resolved path: {image_path}")

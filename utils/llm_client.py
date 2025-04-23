@@ -101,6 +101,7 @@ class TextPrompt(DataClassJsonMixin):
     """Internal representation of user-generated text prompt."""
 
     text: str
+    image_url: str = None
 
 
 @dataclass
@@ -601,7 +602,7 @@ class GeminiDirectClient(LLMClient):
     It's specifically tailored for Gemini-2.5-pro-exp and similar models.
     """
 
-    def __init__(self, model_name: str = "gemini-2.5-pro-exp", max_retries=2):
+    def __init__(self, model_name: str = "gemini-2.5-pro-exp-03-25", max_retries=2):
         """Initialize the Gemini client via OpenAI API.
 
         Args:
@@ -660,7 +661,17 @@ class GeminiDirectClient(LLMClient):
             # Handle different message types
             if str(type(augment_message)) == str(TextPrompt):
                 augment_message = cast(TextPrompt, augment_message)
-                openai_message = {"role": "user", "content": augment_message.text}
+                # Handle image URLs if present
+                if augment_message.image_url:
+                    openai_message = {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": augment_message.text},
+                            {"type": "image_url", "image_url": {"url": augment_message.image_url}}
+                        ]
+                    }
+                else:
+                    openai_message = {"role": "user", "content": augment_message.text}
                 openai_messages.append(openai_message)
             elif str(type(augment_message)) == str(TextResult):
                 augment_message = cast(TextResult, augment_message)
@@ -726,6 +737,8 @@ class GeminiDirectClient(LLMClient):
         response = None
         for retry in range(self.max_retries):
             try:
+                print(f"Making API call to Gemini model: {self.model_name}")
+                print(f"Messages: {openai_messages}")
                 response = self.client.chat.completions.create(
                     model=self.model_name,
                     messages=openai_messages,
@@ -734,12 +747,15 @@ class GeminiDirectClient(LLMClient):
                     tool_choice=tool_choice_param,
                     max_tokens=max_tokens,
                 )
+                if response is None:
+                    print("Warning: API call returned None response")
+                    if retry == self.max_retries - 1:
+                        raise ValueError("API call returned None response after all retries")
+                    continue
+                print(f"API call successful, received response")
                 break
-            except (
-                OpenAI_APIConnectionError,
-                OpenAI_InternalServerError,
-                OpenAI_RateLimitError,
-            ) as e:
+            except Exception as e:
+                print(f"Error during API call: {str(e)}")
                 if retry == self.max_retries - 1:
                     print(f"Failed Gemini request after {retry + 1} retries")
                     raise e
@@ -750,11 +766,22 @@ class GeminiDirectClient(LLMClient):
 
         # Convert response back to Augment format
         augment_messages = []
-        assert response is not None
+
+        # Check if we have a valid response
+        if response is None:
+            print("Error: No response received from API")
+            # Return a simple text response as fallback
+            augment_messages.append(TextResult(text="I'm sorry, I couldn't process your request due to an API error. Please try again later."))
+            return augment_messages, {"error": "No response from API"}
 
         # Get the first choice (we only support one response)
         if len(response.choices) > 1:
             print("Warning: Multiple choices returned, using only the first one")
+
+        if len(response.choices) == 0:
+            print("Error: No choices in response")
+            augment_messages.append(TextResult(text="I'm sorry, I couldn't process your request due to an API error. Please try again later."))
+            return augment_messages, {"error": "No choices in response"}
 
         openai_response_message = response.choices[0].message
         tool_calls = openai_response_message.tool_calls
@@ -783,12 +810,21 @@ class GeminiDirectClient(LLMClient):
             raise ValueError("Neither tool_calls nor content present in response")
 
         # Prepare metadata
-        assert response.usage is not None
-        message_metadata = {
-            "raw_response": response,
-            "input_tokens": response.usage.prompt_tokens,
-            "output_tokens": response.usage.completion_tokens,
-        }
+        message_metadata = {"raw_response": response}
+
+        # Add usage data if available
+        if response.usage is not None:
+            try:
+                message_metadata["input_tokens"] = response.usage.prompt_tokens
+                message_metadata["output_tokens"] = response.usage.completion_tokens
+            except AttributeError as e:
+                print(f"Warning: Could not access usage data: {str(e)}")
+                message_metadata["input_tokens"] = -1
+                message_metadata["output_tokens"] = -1
+        else:
+            print("Warning: No usage data in response")
+            message_metadata["input_tokens"] = -1
+            message_metadata["output_tokens"] = -1
 
         return augment_messages, message_metadata
 

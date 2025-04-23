@@ -65,9 +65,13 @@ class ImageManager:
 
     def _load_existing_images(self):
         """Load existing images and views from the workspace."""
+        # Clear existing registry
+        self.image_views = {}
+
         # Load original images
         for img_path in self.images_dir.glob("*"):
             if img_path.is_file() and img_path.suffix.lower() in ['.jpg', '.jpeg', '.png']:
+                print(f"Registering image: {img_path}")
                 self.image_views[img_path] = {}
 
         # Load views
@@ -170,7 +174,10 @@ class ImageManager:
                 continue
 
         if found_path is None:
-            raise ValueError(f"Image not found in workspace registry: {image_path}")
+            # If not found in registry, add it
+            print(f"Image not found in registry, adding: {image_path}")
+            self.image_views[image_path] = {}
+            found_path = image_path
 
         # Use the found path for the rest of the function
         image_path = found_path
@@ -224,15 +231,21 @@ class ImageManager:
         Returns:
             List of paths to all updated images (original + views)
         """
+        # Normalize the path
+        if not view_path.is_absolute():
+            view_path = self.views_dir / view_path.name
+
         # Find the view
         view_obj = None
         original_path = None
 
         for img_path, views in self.image_views.items():
             for v_id, v in views.items():
-                if v.view_path == view_path:
+                # Compare by name to handle path differences
+                if v.view_path.name == view_path.name:
                     view_obj = v
                     original_path = img_path
+                    view_path = v.view_path  # Use the registered path
                     break
             if view_obj:
                 break
@@ -283,6 +296,24 @@ class ImageManager:
         Returns:
             List of paths to all updated images (original + views)
         """
+        # Normalize the path
+        if not view_path.is_absolute():
+            view_path = self.views_dir / view_path.name
+
+        # Check if the file exists
+        if not view_path.exists():
+            # Try to find the view by name
+            for img_path, views in self.image_views.items():
+                for v_id, v in views.items():
+                    if v.view_path.name == view_path.name:
+                        view_path = v.view_path
+                        break
+                if view_path.exists():
+                    break
+
+        if not view_path.exists():
+            raise ValueError(f"View not found: {view_path}")
+
         # Load the view
         view_img = Image.open(view_path)
 
@@ -333,7 +364,10 @@ class ImageManager:
                     continue
 
             if found_path is None:
-                return []
+                # If not found in registry, add it
+                print(f"Image not found in registry for list_views, adding: {image_path}")
+                self.image_views[image_path] = {}
+                found_path = image_path
 
             return [v.view_path for v in self.image_views[found_path].values()]
         else:
