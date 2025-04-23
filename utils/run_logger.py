@@ -67,6 +67,10 @@ class RunLogger:
         self.turn_counter = 0
         self.image_counter = 0
 
+        # Initialize agent history for detailed thought process tracking
+        self.agent_history = []
+        self.history_counter = 0
+
         # Create index.html file
         self._create_index_html()
 
@@ -351,6 +355,16 @@ class RunLogger:
 
         current_turn = self.conversation_log[-1]
         current_turn["model_response"] = response
+
+        # Add to agent history
+        self.history_counter += 1
+        self.agent_history.append({
+            "history_id": self.history_counter,
+            "timestamp": datetime.now().isoformat(),
+            "type": "model_response",
+            "content": response,
+            "turn_id": current_turn["turn_id"]
+        })
 
         self._update_html()
 

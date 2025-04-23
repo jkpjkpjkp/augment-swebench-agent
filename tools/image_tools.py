@@ -110,8 +110,8 @@ Example: To crop the top-left quarter of the image, use bbox=[0, 0, 500, 500]
             images = self.image_manager.list_images()
             if not images:
                 return ToolImplOutput(
-                    tool_output="Error: No image has been selected yet. Use select_image first.",
-                    tool_result_message="Error: No image has been selected yet. Use select_image first.",
+                    tool_output="Error: No image has been selected yet. Use switch_image first.",
+                    tool_result_message="Error: No image has been selected yet. Use switch_image first.",
                 )
             # Use the first image as a fallback
             image_path = images[0]
@@ -166,7 +166,7 @@ Example: To crop the top-left quarter of the image, use bbox=[0, 0, 500, 500]
                                 view_y1 + pixel_y2,
                             )
                             view_path = self.image_manager.create_view(
-                                orig_path, adjusted_coords, view_id
+                                orig_path, view_id, adjusted_coords
                             )
                             break
                     else:
@@ -179,7 +179,7 @@ Example: To crop the top-left quarter of the image, use bbox=[0, 0, 500, 500]
                     )
             else:
                 # It's an original image
-                view_path = self.image_manager.create_view(image_path, coordinates, view_id)
+                view_path = self.image_manager.create_view(image_path, view_id, coordinates)
 
             # Get information about the created view
             view_info = self.image_manager.get_view_info(view_path)
@@ -212,18 +212,10 @@ Example: To crop the top-left quarter of the image, use bbox=[0, 0, 500, 500]
         return f"Creating a new view with bounding box {bbox}"
 
 
-class SelectTool(LLMTool):
-    """Tool for selecting an entire image or view."""
+class SwitchImageTool(LLMTool):
+    """Tool for switching to a different image or view."""
 
-    name = "select_image"
-    description = """Select an image or view from the available images in the workspace.
-
-This tool allows you to select an image from the list of available images shown at the beginning of each message.
-Use the exact image name from the "Available images" list (e.g., "37_3.png" or a view like "37_3__region_1.png").
-
-The tool returns information about the selected image, including its size and path, and displays the image for analysis.
-After selecting an image, you should create views (crops) of specific regions using the crop_image tool.
-"""
+    name = "switch_image"
     input_schema = {
         "type": "object",
         "properties": {
@@ -235,8 +227,41 @@ After selecting an image, you should create views (crops) of specific regions us
         "required": ["image_path"],
     }
 
+    @property
+    def description(self) -> str:
+        """Dynamically generate the tool description with the list of available images."""
+        # Get the list of all available images
+        all_images = self.image_manager.list_images() if hasattr(self, 'image_manager') else []
+        all_views = []
+
+        if all_images:
+            for img in all_images:
+                if hasattr(self, 'image_manager'):
+                    views = self.image_manager.list_views(img)
+                    all_views.extend(views)
+
+        # Create a formatted list of all images
+        image_list = "Available images:\n"
+        for img in all_images:
+            image_list += f"- {img.name}\n"
+
+        # Add views
+        if all_views:
+            image_list += "\nAvailable views:\n"
+            for view in all_views:
+                image_list += f"- {view.name}\n"
+
+        # Create the description with the image list
+        desc = f"""View a different crop.
+
+{image_list}
+
+This tool allows you to switch between different images and views. It returns information about the selected image, including its size and path, and displays the image for analysis.
+After switching to an image, you can create views (crops) of specific regions using the crop_image tool."""
+        return desc
+
     def __init__(self, workspace_manager: WorkspaceManager):
-        """Initialize the select tool.
+        """Initialize the switch image tool.
 
         Args:
             workspace_manager: Workspace manager for resolving paths
@@ -257,7 +282,7 @@ After selecting an image, you should create views (crops) of specific regions us
         tool_input: Dict[str, Any],
         dialog_messages: Optional[DialogMessages] = None,
     ) -> ToolImplOutput:
-        """Implement the select tool.
+        """Implement the switch image tool.
 
         Args:
             tool_input: Dictionary containing the tool input parameters
@@ -325,12 +350,12 @@ After selecting an image, you should create views (crops) of specific regions us
                 try:
                     view_info = self.image_manager.get_view_info(image_path)
                     return ToolImplOutput(
-                        tool_output=f"Selected view at {image_path}\n"
+                        tool_output=f"Switched to view at {image_path}\n"
                                    f"View ID: {view_info['view_id']}\n"
                                    f"Original image: {view_info['original_image']}\n"
                                    f"Coordinates: {view_info['coordinates']}\n"
                                    f"Size: {size[0]}x{size[1]}",
-                        tool_result_message=f"Selected view at {image_path}",
+                        tool_result_message=f"Switched to view at {image_path}",
                     )
                 except ValueError:
                     # Not a registered view, just return basic info
@@ -354,7 +379,7 @@ After selecting an image, you should create views (crops) of specific regions us
                 # and let the agent handle it
 
                 # Create a message about the image
-                image_message = f"Selected image at {image_path}\nSize: {size[0]}x{size[1]}\nImage URL: {img_url}"
+                image_message = f"Switched to image at {image_path}\nSize: {size[0]}x{size[1]}\nImage URL: {img_url}"
 
                 # Store the image URL in a separate variable for the agent to use
                 # but don't include it in the tool output to avoid logging it
@@ -388,24 +413,24 @@ After selecting an image, you should create views (crops) of specific regions us
                             image_list += f"- {view.name}\n"
 
                 return ToolImplOutput(
-                    tool_output=f"Selected image at {image_path}\n"
+                    tool_output=f"Switched to image at {image_path}\n"
                                f"Size: {size[0]}x{size[1]}\n\n"
                                f"{image_list}",
-                    tool_result_message=f"Selected image: {image_path.name}",
+                    tool_result_message=f"Switched to image: {image_path.name}",
                     aux_data={"image_url": img_url}  # Store the actual URL in aux_data
                 )
             except Exception as e:
                 print(f"Error encoding image: {str(e)}")
                 return ToolImplOutput(
-                    tool_output=f"Selected image at {image_path}\n"
+                    tool_output=f"Switched to image at {image_path}\n"
                                f"Size: {size[0]}x{size[1]}",
-                    tool_result_message=f"Selected image at {image_path}",
+                    tool_result_message=f"Switched to image at {image_path}",
                 )
 
         except Exception as e:
             return ToolImplOutput(
-                tool_output=f"Error selecting image: {str(e)}",
-                tool_result_message=f"Error selecting image: {str(e)}",
+                tool_output=f"Error switching to image: {str(e)}",
+                tool_result_message=f"Error switching to image: {str(e)}",
             )
 
     def get_tool_start_message(self, tool_input: Dict[str, Any]) -> str:
@@ -417,7 +442,7 @@ After selecting an image, you should create views (crops) of specific regions us
         Returns:
             A message describing the operation
         """
-        return f"Selecting image at {tool_input['image_path']}"
+        return f"Switching to image at {tool_input['image_path']}"
 
 
 class BlackoutTool(LLMTool):

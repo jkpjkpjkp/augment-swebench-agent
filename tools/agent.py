@@ -11,12 +11,12 @@ from utils.workspace_manager import WorkspaceManager
 from utils.run_logger import RunLogger
 from utils.text_cleaner import clean_tool_result
 from tools.complete_tool import CompleteTool
-from prompts.system_prompt import SYSTEM_PROMPT
+from prompts.instruction import SYSTEM_PROMPT
 from tools.str_replace_tool import StrReplaceEditorTool
 from tools.sequential_thinking_tool import SequentialThinkingTool
 from tools.image_tools import (
     CropTool,
-    SelectTool,
+    SwitchImageTool,
     BlackoutTool,
     AddImageTool,
 )
@@ -111,7 +111,7 @@ try breaking down the task into smaller steps and call this tool multiple times.
             SequentialThinkingTool(),
             # Image tools for VQA
             CropTool(workspace_manager=workspace_manager),
-            SelectTool(workspace_manager=workspace_manager),
+            SwitchImageTool(workspace_manager=workspace_manager),
             BlackoutTool(workspace_manager=workspace_manager),
             AddImageTool(workspace_manager=workspace_manager),
             self.complete_tool,
@@ -342,10 +342,10 @@ try breaking down the task into smaller steps and call this tool multiple times.
 
                         # Extract image path from tool result if present
 
-                        # For select_image tool
-                        if tool_call.tool_name == "select_image":
+                        # For switch_image tool
+                        if tool_call.tool_name == "switch_image":
                             # Extract the image path
-                            path_match = re.search(r"Selected image at ([^\n]+)", tool_result)
+                            path_match = re.search(r"Switched to image at ([^\n]+)", tool_result)
                             if path_match:
                                 image_path = Path(path_match.group(1))
                                 self.last_image_path = image_path
