@@ -397,6 +397,9 @@ class BlackoutTool(LLMTool):
 This tool allows you to black out an entire image or view, indicating that
 you have finished analyzing it. The blackout is applied to the original image
 and all other views that overlap with the blacked-out region.
+
+After blackout, the view is automatically deleted along with any other fully black views.
+The smallest remaining view (with the least number of pixels) is identified for further analysis.
 """
     input_schema = {
         "type": "object",

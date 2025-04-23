@@ -1,7 +1,6 @@
 from copy import deepcopy
 from typing import Any, Optional
 from pathlib import Path
-from tools.bash_tool import create_bash_tool, create_docker_bash_tool
 from utils.common import (
     DialogMessages,
     LLMTool,
@@ -19,7 +18,6 @@ from tools.image_tools import (
     BlackoutTool,
     AddImageTool,
 )
-from termcolor import colored
 from rich.console import Console
 import logging
 
@@ -97,27 +95,7 @@ try breaking down the task into smaller steps and call this tool multiple times.
         # Create and store the complete tool
         self.complete_tool = CompleteTool()
 
-        if docker_container_id is not None:
-            print(
-                colored(
-                    f"Enabling docker bash tool with container {docker_container_id}",
-                    "blue",
-                )
-            )
-            self.logger_for_agent_logs.info(
-                f"Enabling docker bash tool with container {docker_container_id}"
-            )
-            bash_tool = create_docker_bash_tool(
-                container=docker_container_id,
-                ask_user_permission=ask_user_permission,
-            )
-        else:
-            bash_tool = create_bash_tool(
-                ask_user_permission=ask_user_permission,
-            )
-
         self.tools = [
-            bash_tool,
             StrReplaceEditorTool(workspace_manager=workspace_manager),
             SequentialThinkingTool(),
             # Image tools for VQA

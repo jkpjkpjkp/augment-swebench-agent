@@ -33,8 +33,13 @@ TIPS:
 - Be methodical in your analysis, examining the image section by section
 - Create multiple views to focus on different parts of the image
 - Be detailed in your descriptions of what you see in each view
+- But only report information relavent to the question
 - Consider the context and purpose of the image when answering the question
+- Zoom in by repeatedly cropping, until you have a very clear view of the region of interest
 - If the image contains text, make sure to read and report it accurately
+- If you are done with an image, black it out before selecting another one. This will help you keep track of which parts of the image you have already analyzed.
+- When you black out a view, it is automatically deleted along with any other fully black views
+- The smallest remaining view (with the least number of pixels) is identified for further analysis
 - DO NOT repeatedly select the same image - select it once, then use crop_image to analyze specific regions
 - After selecting an image, move on to creating views with crop_image to analyze specific parts
 - When you're done with your analysis, use the complete tool to submit your final answer

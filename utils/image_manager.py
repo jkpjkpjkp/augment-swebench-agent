@@ -5,7 +5,6 @@ in the workspace. It ensures that changes to one view are reflected in all other
 views and the original image.
 """
 
-import os
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 import numpy as np
@@ -137,15 +136,15 @@ class ImageManager:
     def create_view(
         self,
         image_path: Path,
-        coordinates: Tuple[int, int, int, int],
-        view_id: Optional[str] = None
+        view_id: Optional[str] = None,
+        coordinates: Tuple[int, int, int, int] = None
     ) -> Path:
         """Create a new view (crop) of an image.
 
         Args:
             image_path: Path to the original image
-            coordinates: Crop coordinates (x1, y1, x2, y2)
             view_id: Optional identifier for the view
+            coordinates: Crop coordinates (x1, y1, x2, y2)
 
         Returns:
             Path to the created view
@@ -187,6 +186,12 @@ class ImageManager:
             view_id = f"view_{len(self.image_views[image_path]) + 1}"
 
         # Validate coordinates
+        if coordinates is None:
+            raise ValueError("Coordinates must be provided")
+
+        if len(coordinates) != 4:
+            raise ValueError(f"Invalid coordinates: {coordinates}. Must be a tuple of (x1, y1, x2, y2)")
+
         x1, y1, x2, y2 = coordinates
         img = Image.open(image_path)
         width, height = img.size
@@ -298,6 +303,85 @@ class ImageManager:
 
         return updated_paths
 
+    def is_fully_black(self, image_path: Path) -> bool:
+        """Check if an image is fully black.
+
+        Args:
+            image_path: Path to the image to check
+
+        Returns:
+            True if the image is fully black, False otherwise
+        """
+        img = Image.open(image_path)
+        img_array = np.array(img)
+        return np.all(img_array == 0)
+
+    def find_smallest_view(self, original_image_path: Path) -> Optional[Path]:
+        """Find the smallest view (least pixels) for an image.
+
+        Args:
+            original_image_path: Path to the original image
+
+        Returns:
+            Path to the smallest view, or None if there are no views
+        """
+        if original_image_path not in self.image_views:
+            return None
+
+        views = self.image_views[original_image_path]
+        if not views:
+            return None
+
+        # Find the view with the smallest area (width * height)
+        smallest_view = None
+        smallest_area = float('inf')
+
+        for view_id, view in views.items():
+            # Skip fully black views
+            if self.is_fully_black(view.view_path):
+                continue
+
+            # Calculate area
+            width = view.coordinates[2] - view.coordinates[0]
+            height = view.coordinates[3] - view.coordinates[1]
+            area = width * height
+
+            if area < smallest_area:
+                smallest_area = area
+                smallest_view = view.view_path
+
+        return smallest_view
+
+    def delete_fully_black_views(self, original_image_path: Path) -> List[Path]:
+        """Delete all fully black views for an image.
+
+        Args:
+            original_image_path: Path to the original image
+
+        Returns:
+            List of paths to deleted views
+        """
+        if original_image_path not in self.image_views:
+            return []
+
+        deleted_views = []
+        views_to_delete = []
+
+        # Find all fully black views
+        for view_id, view in self.image_views[original_image_path].items():
+            if self.is_fully_black(view.view_path):
+                views_to_delete.append((view_id, view.view_path))
+
+        # Delete the views
+        for view_id, view_path in views_to_delete:
+            # Remove from registry
+            del self.image_views[original_image_path][view_id]
+            # Delete the file
+            view_path.unlink(missing_ok=True)
+            deleted_views.append(view_path)
+
+        return deleted_views
+
     def blackout_view(self, view_path: Path) -> List[Path]:
         """Blackout a view, marking it as analyzed.
 
@@ -333,6 +417,18 @@ class ImageManager:
         if not view_path.exists():
             raise ValueError(f"View not found: {view_path}")
 
+        # Find the original image for this view
+        original_image_path = None
+        view_id_to_delete = None
+        for img_path, views in self.image_views.items():
+            for v_id, v in views.items():
+                if v.view_path == view_path:
+                    original_image_path = img_path
+                    view_id_to_delete = v_id
+                    break
+            if original_image_path:
+                break
+
         # Load the view
         view_img = Image.open(view_path)
 
@@ -340,7 +436,30 @@ class ImageManager:
         black_img = Image.new('RGB', view_img.size, (0, 0, 0))
 
         # Update the view with the black image
-        return self.update_view(view_path, black_img)
+        updated_paths = self.update_view(view_path, black_img)
+
+        # If we found the original image, delete the blacked out view and find the smallest view
+        if original_image_path and view_id_to_delete:
+            # Delete the view we just blacked out
+            if view_id_to_delete in self.image_views[original_image_path]:
+                view_to_delete = self.image_views[original_image_path][view_id_to_delete].view_path
+                del self.image_views[original_image_path][view_id_to_delete]
+                view_to_delete.unlink(missing_ok=True)
+                print(f"Deleted blacked out view: {view_to_delete.name}")
+
+            # Delete any other fully black views
+            deleted_views = self.delete_fully_black_views(original_image_path)
+            if deleted_views:
+                print(f"Deleted {len(deleted_views)} additional fully black views")
+
+            # Find the smallest view
+            smallest_view = self.find_smallest_view(original_image_path)
+            if smallest_view:
+                print(f"Smallest remaining view: {smallest_view.name}")
+            else:
+                print("No remaining views after blackout")
+
+        return updated_paths
 
     def list_images(self) -> List[Path]:
         """List all original images in the workspace.

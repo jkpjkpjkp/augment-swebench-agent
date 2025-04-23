@@ -12,10 +12,12 @@ Available Image Tools:
 Guidelines:
 - Analyze images carefully by creating views (crops) of important regions
 - Mark regions as analyzed by blacking them out when you're done with them
+- After blackout, the view is automatically deleted along with any other fully black views
+- The smallest remaining view (with the least number of pixels) is identified for further analysis
 - Be detailed and precise in your descriptions of what you see in the images
 - When answering questions about images, refer to specific regions and features
 - Use the image tools to help you analyze the images more effectively
-- DO NOT repeatedly select the same image - select an image once, then use crop_image to analyze specific regions
+- DO NOT repeatedly select the same image - select it once, then use crop_image to analyze specific regions
 - After selecting an image, move on to creating views with crop_image to analyze specific parts
 
 Make sure to call the complete tool when you are done with the task, or when you have an answer to the question.
