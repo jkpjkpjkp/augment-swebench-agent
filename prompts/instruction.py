@@ -25,8 +25,8 @@ Follow these steps to analyze the image:
 6. Provide an accurate answer to the question based on your analysis
 
 Available Image Tools:
-- select_image: Select an image or view to get information about it
-- crop_image: Create a new view by cropping with coordinates (x1, y1, x2, y2)
+- select_image: Select an image from the "Available images" list shown at the beginning of each message
+- crop_image: Create a new view by cropping the currently displayed image with a bounding box [x1, y1, x2, y2] in normalized coordinates [0-1000]
 - blackout_image: Black out a view to mark it as analyzed
 
 TIPS:
@@ -42,5 +42,11 @@ TIPS:
 - The smallest remaining view (with the least number of pixels) is identified for further analysis
 - DO NOT repeatedly select the same image - select it once, then use crop_image to analyze specific regions
 - After selecting an image, move on to creating views with crop_image to analyze specific parts
-- When you're done with your analysis, use the complete tool to submit your final answer
+
+Example workflow:
+1. First select an image: `select_image(image_path="37_3.png")`
+2. Then crop a region: `crop_image(bbox=[0, 0, 500, 500])` (top-left quarter)
+3. Analyze what you see in the cropped view
+4. Create more crops as needed: `crop_image(bbox=[500, 0, 1000, 500])` (top-right quarter)
+5. When done with your analysis, use the complete tool to submit your final answer
 """

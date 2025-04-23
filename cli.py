@@ -48,25 +48,14 @@ def main():
         default="agent_logs.txt",
         help="Path to save logs",
     )
-    parser.add_argument(
-        "--needs-permission",
-        "-p",
-        help="Ask for permission before executing commands",
-        action="store_true",
-        default=False,
-    )
+    # Removed --needs-permission argument as it's no longer used
     parser.add_argument(
         "--use-container-workspace",
         type=str,
         default=None,
         help="(Optional) Path to the container workspace to run commands in.",
     )
-    parser.add_argument(
-        "--docker-container-id",
-        type=str,
-        default=None,
-        help="(Optional) Docker container ID to run commands in.",
-    )
+    # Removed --docker-container-id argument as it's no longer used
     parser.add_argument(
         "--minimize-stdout-logs",
         help="Minimize the amount of logs printed to stdout.",
@@ -133,8 +122,7 @@ def main():
         logger_for_agent_logs=logger_for_agent_logs,
         max_output_tokens_per_turn=MAX_OUTPUT_TOKENS_PER_TURN,
         max_turns=MAX_TURNS,
-        ask_user_permission=args.needs_permission,
-        docker_container_id=args.docker_container_id,
+        log_dir="agent_runs"
     )
 
     if args.problem_statement is not None:

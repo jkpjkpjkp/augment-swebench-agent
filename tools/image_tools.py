@@ -36,44 +36,36 @@ class CropTool(LLMTool):
     """Tool for creating a new view by cropping an image."""
 
     name = "crop_image"
-    description = """Create a new view of an image by cropping it with 4 coordinates.
+    description = """Create a new view by cropping the currently displayed image.
 
-This tool allows you to create a new view (crop) of an image by specifying the coordinates
-of the region to crop. The coordinates are specified as (x1, y1, x2, y2), where:
+This tool allows you to create a new view (crop) of the currently displayed image by specifying a bounding box.
+
+IMPORTANT: The bounding box is specified as a list of 4 integers [x1, y1, x2, y2], where:
 - (x1, y1) is the top-left corner of the crop region
 - (x2, y2) is the bottom-right corner of the crop region
 
-The coordinates are in pixels, with (0, 0) being the top-left corner of the image.
+The coordinates are NORMALIZED to a range of [0, 1000], where:
+- (0, 0) is the top-left corner of the image
+- (1000, 1000) is the bottom-right corner of the image
+
+Example: To crop the top-left quarter of the image, use bbox=[0, 0, 500, 500]
 """
     input_schema = {
         "type": "object",
         "properties": {
-            "image_path": {
-                "type": "string",
-                "description": "Path to the image to crop. Can be an original image or a view.",
-            },
-            "x1": {
-                "type": "integer",
-                "description": "X-coordinate of the top-left corner of the crop region.",
-            },
-            "y1": {
-                "type": "integer",
-                "description": "Y-coordinate of the top-left corner of the crop region.",
-            },
-            "x2": {
-                "type": "integer",
-                "description": "X-coordinate of the bottom-right corner of the crop region.",
-            },
-            "y2": {
-                "type": "integer",
-                "description": "Y-coordinate of the bottom-right corner of the crop region.",
+            "bbox": {
+                "type": "array",
+                "items": {"type": "integer"},
+                "minItems": 4,
+                "maxItems": 4,
+                "description": "Bounding box coordinates [x1, y1, x2, y2] in normalized range [0, 1000]. Format is [left, top, right, bottom].",
             },
             "view_id": {
                 "type": "string",
                 "description": "Optional identifier for the new view. If not provided, a default ID will be generated.",
             },
         },
-        "required": ["image_path", "x1", "y1", "x2", "y2"],
+        "required": ["bbox"],
     }
 
     def __init__(self, workspace_manager: WorkspaceManager):
@@ -100,50 +92,34 @@ The coordinates are in pixels, with (0, 0) being the top-left corner of the imag
         Returns:
             ToolImplOutput containing the result of the operation
         """
-        image_path = Path(tool_input["image_path"])
-        x1 = tool_input["x1"]
-        y1 = tool_input["y1"]
-        x2 = tool_input["x2"]
-        y2 = tool_input["y2"]
+        # Extract the bounding box coordinates
+        bbox = tool_input["bbox"]
+        if not isinstance(bbox, list) or len(bbox) != 4:
+            return ToolImplOutput(
+                tool_output="Error: bbox must be a list of 4 integers [x1, y1, x2, y2]",
+                tool_result_message="Error: bbox must be a list of 4 integers [x1, y1, x2, y2]",
+            )
+
+        # Extract the coordinates
+        x1, y1, x2, y2 = bbox
         view_id = tool_input.get("view_id")
 
-        # Resolve the image path
-        original_path = image_path
-
-        # If it's already a Path object, convert to string first
-        if isinstance(image_path, Path):
-            image_path = str(image_path)
-
-        image_path = Path(image_path)
-
-        # Check if this is a view ID rather than a path
-        path_str = str(image_path)
-        view_found = False
-
-        # Try to find a view with this ID
-        for img_path, views in self.image_manager.image_views.items():
-            if path_str in views:
-                image_path = views[path_str].view_path
-                view_found = True
-                break
-
-        if not view_found and not image_path.is_absolute():
-            # Try different possible paths
-            possible_paths = [
-                image_path,  # As is
-                self.workspace_manager.root / image_path,  # Relative to workspace root
-                self.workspace_manager.root / "images" / image_path.name,  # In images directory
-                self.workspace_manager.root / "views" / image_path.name,  # In views directory
-            ]
-
-            # Try each path
-            for path in possible_paths:
-                if path.exists():
-                    image_path = path
-                    break
+        # Use the last selected image (currently displayed image)
+        if not hasattr(self, "last_selected_image") or self.last_selected_image is None:
+            # Try to find the last selected image from the image manager
+            images = self.image_manager.list_images()
+            if not images:
+                return ToolImplOutput(
+                    tool_output="Error: No image has been selected yet. Use select_image first.",
+                    tool_result_message="Error: No image has been selected yet. Use select_image first.",
+                )
+            # Use the first image as a fallback
+            image_path = images[0]
+        else:
+            image_path = self.last_selected_image
 
         # Debug output
-        print(f"CropTool: Original path: {original_path}, Resolved path: {image_path}")
+        print(f"CropTool: Using image: {image_path}, Bbox: {bbox}")
 
         try:
             # Check if the image exists
@@ -153,8 +129,24 @@ The coordinates are in pixels, with (0, 0) being the top-left corner of the imag
                     tool_result_message=f"Error: Image not found at {image_path}",
                 )
 
-            # Create the view
-            coordinates = (x1, y1, x2, y2)
+            # Get the image size
+            from utils.image_utils import get_image_size
+            img_width, img_height = get_image_size(image_path)
+
+            # Convert normalized coordinates [0, 1000] to pixel coordinates
+            pixel_x1 = int(x1 * img_width / 1000)
+            pixel_y1 = int(y1 * img_height / 1000)
+            pixel_x2 = int(x2 * img_width / 1000)
+            pixel_y2 = int(y2 * img_height / 1000)
+
+            # Ensure coordinates are within image bounds
+            pixel_x1 = max(0, min(pixel_x1, img_width - 1))
+            pixel_y1 = max(0, min(pixel_y1, img_height - 1))
+            pixel_x2 = max(pixel_x1 + 1, min(pixel_x2, img_width))
+            pixel_y2 = max(pixel_y1 + 1, min(pixel_y2, img_height))
+
+            # Create the view with pixel coordinates
+            coordinates = (pixel_x1, pixel_y1, pixel_x2, pixel_y2)
 
             # Check if this is a view or an original image
             is_view = image_path.parent == self.image_manager.views_dir
@@ -165,13 +157,13 @@ The coordinates are in pixels, with (0, 0) being the top-left corner of the imag
                     for v_id, v in views.items():
                         if v.view_path == image_path:
                             # Found the view
-                            vx1, vy1, vx2, vy2 = v.coordinates
+                            view_x1, view_y1, view_x2, view_y2 = v.coordinates
                             # Adjust coordinates relative to the original image
                             adjusted_coords = (
-                                vx1 + x1,
-                                vy1 + y1,
-                                vx1 + x2,
-                                vy1 + y2,
+                                view_x1 + pixel_x1,
+                                view_y1 + pixel_y1,
+                                view_x1 + pixel_x2,
+                                view_y1 + pixel_y2,
                             )
                             view_path = self.image_manager.create_view(
                                 orig_path, adjusted_coords, view_id
@@ -216,17 +208,21 @@ The coordinates are in pixels, with (0, 0) being the top-left corner of the imag
         Returns:
             A message describing the operation
         """
-        return f"Creating a new view of {tool_input['image_path']} with coordinates ({tool_input['x1']}, {tool_input['y1']}, {tool_input['x2']}, {tool_input['y2']})"
+        bbox = tool_input.get("bbox", [0, 0, 0, 0])
+        return f"Creating a new view with bounding box {bbox}"
 
 
 class SelectTool(LLMTool):
     """Tool for selecting an entire image or view."""
 
     name = "select_image"
-    description = """Select an entire image or view.
+    description = """Select an image or view from the available images in the workspace.
 
-This tool allows you to select an entire image or view for further processing.
-It returns information about the selected image, including its size and path.
+This tool allows you to select an image from the list of available images shown at the beginning of each message.
+Use the exact image name from the "Available images" list (e.g., "37_3.png" or a view like "37_3__region_1.png").
+
+The tool returns information about the selected image, including its size and path, and displays the image for analysis.
+After selecting an image, you should create views (crops) of specific regions using the crop_image tool.
 """
     input_schema = {
         "type": "object",
@@ -248,6 +244,13 @@ It returns information about the selected image, including its size and path.
         super().__init__()
         self.workspace_manager = workspace_manager
         self.image_manager = ImageManager(workspace_manager.root)
+
+        # Store the last selected image path for use by other tools
+        # This is a class variable shared across all instances
+        if not hasattr(CropTool, "last_selected_image"):
+            CropTool.last_selected_image = None
+        if not hasattr(BlackoutTool, "last_selected_image"):
+            BlackoutTool.last_selected_image = None
 
     def run_impl(
         self,
@@ -355,11 +358,40 @@ It returns information about the selected image, including its size and path.
 
                 # Store the image URL in a separate variable for the agent to use
                 # but don't include it in the tool output to avoid logging it
+
+                # Store the selected image path for use by other tools
+                CropTool.last_selected_image = image_path
+                BlackoutTool.last_selected_image = image_path
+
+                # Get the list of all available images for display
+                all_images = self.image_manager.list_images()
+                all_views = []
+                for img in all_images:
+                    views = self.image_manager.list_views(img)
+                    all_views.extend(views)
+
+                # Create a formatted list of all images, highlighting the current one
+                image_list = "Available images:\n"
+                for img in all_images:
+                    if img == image_path:
+                        image_list += f"→ {img.name} (SELECTED)\n"
+                    else:
+                        image_list += f"- {img.name}\n"
+
+                # Add views
+                if all_views:
+                    image_list += "\nAvailable views:\n"
+                    for view in all_views:
+                        if view == image_path:
+                            image_list += f"→ {view.name} (SELECTED)\n"
+                        else:
+                            image_list += f"- {view.name}\n"
+
                 return ToolImplOutput(
                     tool_output=f"Selected image at {image_path}\n"
-                               f"Size: {size[0]}x{size[1]}\n"
-                               f"Image URL: [BASE64_IMAGE_DATA_OMITTED]",
-                    tool_result_message=f"Selected image at {image_path}",
+                               f"Size: {size[0]}x{size[1]}\n\n"
+                               f"{image_list}",
+                    tool_result_message=f"Selected image: {image_path.name}",
                     aux_data={"image_url": img_url}  # Store the actual URL in aux_data
                 )
             except Exception as e:

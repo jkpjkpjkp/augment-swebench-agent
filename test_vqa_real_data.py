@@ -189,7 +189,7 @@ def main():
         logger_for_agent_logs=logger,
         max_output_tokens_per_turn=32768,
         max_turns=20,
-        ask_user_permission=False,
+        log_dir="agent_runs"
     )
 
     # Format the instruction using the template

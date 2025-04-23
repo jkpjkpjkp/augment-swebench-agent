@@ -1,0 +1,27 @@
+[
+  {
+    "turn_id": 1,
+    "timestamp": "2025-04-23T13:12:48.772459",
+    "user_message": "This is a test message with an image",
+    "image_path": "test_run_logs/test_run/images/turn_1_user_1.png",
+    "model_response": "I see a red square in the image.",
+    "tool_calls": [
+      {
+        "tool_name": "test_tool",
+        "tool_input": {
+          "param1": "value1",
+          "param2": 42
+        },
+        "timestamp": "2025-04-23T13:12:48.775504",
+        "tool_result": "Tool executed successfully",
+        "image_path": "test_run_logs/test_run/images/turn_1_tool_1_2.png"
+      }
+    ]
+  },
+  {
+    "turn_id": 2,
+    "timestamp": "2025-04-23T13:12:48.775905",
+    "user_message": "Another test message",
+    "model_response": "I understand your request."
+  }
+]

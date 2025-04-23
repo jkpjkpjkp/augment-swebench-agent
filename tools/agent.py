@@ -8,6 +8,8 @@ from utils.common import (
 )
 from utils.llm_client import LLMClient, TextResult
 from utils.workspace_manager import WorkspaceManager
+from utils.run_logger import RunLogger
+from utils.text_cleaner import clean_tool_result
 from tools.complete_tool import CompleteTool
 from prompts.system_prompt import SYSTEM_PROMPT
 from tools.str_replace_tool import StrReplaceEditorTool
@@ -61,23 +63,19 @@ try breaking down the task into smaller steps and call this tool multiple times.
         max_output_tokens_per_turn: int = 8192,
         max_turns: int = 10,
         use_prompt_budgeting: bool = True,
-        ask_user_permission: bool = False,
-        docker_container_id: Optional[str] = None,
+        log_dir: Optional[str] = "agent_runs",
     ):
-        # Track the last image sent to the model
-        self.last_image_path = None
-        # Track the image paths that have been processed
-        self.processed_images = set()
-        # Track recent tool calls to detect loops
-        self.recent_tool_calls = []
-        self.max_recent_calls = 5
         """Initialize the agent.
 
         Args:
             client: The LLM client to use
+            workspace_manager: Workspace manager for file operations
+            console: Rich console for output
+            logger_for_agent_logs: Logger for agent logs
             max_output_tokens_per_turn: Maximum tokens per turn
             max_turns: Maximum number of turns
-            workspace_manager: Optional workspace manager for taking snapshots
+            use_prompt_budgeting: Whether to use prompt budgeting
+            log_dir: Directory for detailed run logs
         """
         super().__init__()
         self.client = client
@@ -87,6 +85,19 @@ try breaking down the task into smaller steps and call this tool multiple times.
         self.max_turns = max_turns
         self.workspace_manager = workspace_manager
         self.interrupted = False
+
+        # Initialize the run logger
+        self.run_logger = None  # Will be initialized for each run
+        self.log_dir = log_dir
+
+        # Track the last image sent to the model
+        self.last_image_path = None
+        # Track the image paths that have been processed
+        self.processed_images = set()
+        # Track recent tool calls to detect loops
+        self.recent_tool_calls = []
+        self.max_recent_calls = 5
+
         self.dialog = DialogMessages(
             logger_for_agent_logs=logger_for_agent_logs,
             use_prompt_budgeting=use_prompt_budgeting,
@@ -114,8 +125,11 @@ try breaking down the task into smaller steps and call this tool multiple times.
         self.consecutive_identical_tool_calls = 0
         self.last_tool_name = None
 
-    def get_image_list(self) -> str:
+    def get_image_list(self, simplified: bool = False) -> str:
         """Get a formatted list of all images and views in the workspace.
+
+        Args:
+            simplified: Whether to return a simplified list without paths and coordinates
 
         Returns:
             A string containing the list of images and views
@@ -125,21 +139,41 @@ try breaking down the task into smaller steps and call this tool multiple times.
         if not images:
             return "No images found in the workspace."
 
-        result = "Images in workspace:\n"
+        if simplified:
+            # Simplified version for the VLM - just basic info
+            result = "Available images:\n"
 
-        from utils.image_utils import get_image_size
+            from utils.image_utils import get_image_size
 
-        for img_path in images:
-            size = get_image_size(img_path)
-            result += f"- {img_path.name} ({size[0]}x{size[1]})\n"
+            for img_path in images:
+                size = get_image_size(img_path)
+                result += f"- {img_path.name} ({size[0]}x{size[1]})\n"
 
-            # Add views for this image
-            views = self.image_manager.list_views(img_path)
-            if views:
-                result += "  Views:\n"
-                for view_path in views:
-                    view_info = self.image_manager.get_view_info(view_path)
-                    result += f"  - {view_path.name} ({view_info['size'][0]}x{view_info['size'][1]}) - Coordinates: {view_info['coordinates']}\n"
+                # Add views for this image (simplified)
+                views = self.image_manager.list_views(img_path)
+                if views:
+                    result += "  Views:\n"
+                    for view_path in views:
+                        view_info = self.image_manager.get_view_info(view_path)
+                        # Just include the view name and size, not the full path or coordinates
+                        result += f"  - {view_path.name} ({view_info['size'][0]}x{view_info['size'][1]})\n"
+        else:
+            # Detailed version for logging
+            result = "Images in workspace:\n"
+
+            from utils.image_utils import get_image_size
+
+            for img_path in images:
+                size = get_image_size(img_path)
+                result += f"- {img_path.name} ({size[0]}x{size[1]})\n"
+
+                # Add views for this image
+                views = self.image_manager.list_views(img_path)
+                if views:
+                    result += "  Views:\n"
+                    for view_path in views:
+                        view_info = self.image_manager.get_view_info(view_path)
+                        result += f"  - {view_path.name} ({view_info['size'][0]}x{view_info['size'][1]}) - Coordinates: {view_info['coordinates']}\n"
 
         return result
 
@@ -155,8 +189,8 @@ try breaking down the task into smaller steps and call this tool multiple times.
 
         # print("Agent starting with instruction:", instruction)
 
-        # Get the list of images
-        image_list = self.get_image_list()
+        # Get the simplified list of images for the VLM
+        image_list = self.get_image_list(simplified=True)
 
         # Add instruction to dialog before getting mode
         # Append the image list to the instruction
@@ -195,6 +229,14 @@ try breaking down the task into smaller steps and call this tool multiple times.
                     system_prompt=self._get_system_prompt(),
                 )
                 self.dialog.add_model_response(model_response)
+
+                # Log the model response
+                if self.run_logger:
+                    # Extract text from model response
+                    text_results = [item for item in model_response if isinstance(item, TextResult)]
+                    if text_results:
+                        response_text = text_results[0].text
+                        self.run_logger.log_model_response(response_text)
 
                 # Handle tool calls
                 pending_tool_calls = self.dialog.get_pending_tool_calls()
@@ -259,7 +301,7 @@ try breaking down the task into smaller steps and call this tool multiple times.
                     if tool_call.tool_name == "list_images":
                         # Instead of raising an error, just return the image list
                         print("Handling list_images tool call with direct image list")
-                        image_list = self.get_image_list()
+                        image_list = self.get_image_list(simplified=True)
                         tool_result = image_list
                         self.dialog.add_tool_call_result(tool_call, tool_result)
                         # Reset the loop detection
@@ -282,6 +324,10 @@ try breaking down the task into smaller steps and call this tool multiple times.
                         log_message = f"Calling tool {tool_call.tool_name} with input:\n{tool_input_str}"
                         log_message += f"\nTool output: \n{result}\n\n"
                         self.logger_for_agent_logs.info(log_message)
+
+                        # Log the tool call and result
+                        if self.run_logger:
+                            self.run_logger.log_tool_call(tool_call.tool_name, tool_call.tool_input)
 
                         # Handle both ToolResult objects and tuples
                         if isinstance(result, tuple):
@@ -307,19 +353,36 @@ try breaking down the task into smaller steps and call this tool multiple times.
                             # Check if we have aux_data with the image URL
                             if hasattr(result, 'aux_data') and result.aux_data and 'image_url' in result.aux_data:
                                 image_url = result.aux_data['image_url']
-                                # Get the list of images
-                                image_list = self.get_image_list()
+                                # Get the simplified list of images for the VLM
+                                image_list = self.get_image_list(simplified=True)
 
                                 # Create a new user prompt with the image
-                                prompt = TextPrompt(text=f"I'm analyzing this image.\n\n{image_list}")
+                                prompt = TextPrompt(text=f"I'm analyzing this image.")
                                 prompt.image_url = image_url
                                 # Add the image to the dialog
                                 self.dialog._message_lists.append([prompt])
-                                # Now add the tool result
-                                self.dialog.add_tool_call_result(tool_call, tool_result)
+                                # Clean the tool result for the VLM
+                                cleaned_result = clean_tool_result(tool_call.tool_name, tool_result, self.workspace_manager.root)
+
+                                # Now add the cleaned tool result
+                                self.dialog.add_tool_call_result(tool_call, cleaned_result)
+
+                                # Log the tool result with the image
+                                if self.run_logger and self.last_image_path:
+                                    self.run_logger.log_tool_result(tool_result, image_path=self.last_image_path)
                             else:
-                                # Just add the regular tool result
-                                self.dialog.add_tool_call_result(tool_call, tool_result)
+                                # Clean the tool result for the VLM
+                                cleaned_result = clean_tool_result(tool_call.tool_name, tool_result, self.workspace_manager.root)
+
+                                # Just add the cleaned tool result
+                                self.dialog.add_tool_call_result(tool_call, cleaned_result)
+
+                                # Log the tool result with the image if available
+                                if self.run_logger:
+                                    if self.last_image_path:
+                                        self.run_logger.log_tool_result(tool_result, image_path=self.last_image_path)
+                                    else:
+                                        self.run_logger.log_tool_result(tool_result)
 
                         # For crop_image tool
                         elif tool_call.tool_name == "crop_image":
@@ -351,19 +414,29 @@ try breaking down the task into smaller steps and call this tool multiple times.
                                     # Log a message without the full base64 string
                                     print(f"Created image URL for cropped view (base64 data omitted)")
 
-                                    # Get the list of images
-                                    image_list = self.get_image_list()
+                                    # Get the simplified list of images for the VLM
+                                    image_list = self.get_image_list(simplified=True)
 
                                     # Create a new user prompt with the image
-                                    prompt = TextPrompt(text=f"Here's the cropped view I requested. Let me analyze it.\n\n{image_list}")
+                                    prompt = TextPrompt(text=f"Here's the cropped view I requested. Let me analyze it.")
                                     prompt.image_url = img_url
                                     # Add the image to the dialog
                                     self.dialog._message_lists.append([prompt])
                                 except Exception as e:
                                     print(f"Error processing cropped image: {str(e)}")
 
-                            # Add the tool result
-                            self.dialog.add_tool_call_result(tool_call, tool_result)
+                            # Clean the tool result for the VLM
+                            cleaned_result = clean_tool_result(tool_call.tool_name, tool_result, self.workspace_manager.root)
+
+                            # Add the cleaned tool result
+                            self.dialog.add_tool_call_result(tool_call, cleaned_result)
+
+                            # Log the tool result with the image if available
+                            if self.run_logger:
+                                if self.last_image_path:
+                                    self.run_logger.log_tool_result(tool_result, image_path=self.last_image_path)
+                                else:
+                                    self.run_logger.log_tool_result(tool_result)
 
                         # For blackout_image tool
                         elif tool_call.tool_name == "blackout_image":
@@ -395,24 +468,38 @@ try breaking down the task into smaller steps and call this tool multiple times.
                                     # Log a message without the full base64 string
                                     print(f"Created image URL for blacked out view (base64 data omitted)")
 
-                                    # Get the list of images
-                                    image_list = self.get_image_list()
+                                    # Get the simplified list of images for the VLM
+                                    image_list = self.get_image_list(simplified=True)
 
                                     # Create a new user prompt with the image
-                                    prompt = TextPrompt(text=f"I've blacked out this region. Here's the updated image.\n\n{image_list}")
+                                    prompt = TextPrompt(text=f"I've blacked out this region. Here's the updated image.")
                                     prompt.image_url = img_url
                                     # Add the image to the dialog
                                     self.dialog._message_lists.append([prompt])
                                 except Exception as e:
                                     print(f"Error processing blacked out image: {str(e)}")
 
-                            # Add the tool result
-                            self.dialog.add_tool_call_result(tool_call, tool_result)
+                            # Clean the tool result for the VLM
+                            cleaned_result = clean_tool_result(tool_call.tool_name, tool_result, self.workspace_manager.root)
+
+                            # Add the cleaned tool result
+                            self.dialog.add_tool_call_result(tool_call, cleaned_result)
+
+                            # Log the tool result with the image if available
+                            if self.run_logger:
+                                if self.last_image_path:
+                                    self.run_logger.log_tool_result(tool_result, image_path=self.last_image_path)
+                                else:
+                                    self.run_logger.log_tool_result(tool_result)
 
                         # For all other tools
                         else:
-                            # Just add the tool result
+                            # For other tools, we don't need to clean the result
                             self.dialog.add_tool_call_result(tool_call, tool_result)
+
+                            # Log the tool result
+                            if self.run_logger:
+                                self.run_logger.log_tool_result(tool_result)
 
                         if self.complete_tool.should_stop:
                             # Add a fake model response, so the next turn is the user's
@@ -470,6 +557,7 @@ try breaking down the task into smaller steps and call this tool multiple times.
         resume: bool = False,
         orientation_instruction: str | None = None,
         initial_image_path: Path | None = None,
+        run_id: Optional[str] = None,
     ) -> str:
         """Start a new agent run.
 
@@ -479,10 +567,14 @@ try breaking down the task into smaller steps and call this tool multiple times.
                 continuing the dialog.
             orientation_instruction: Optional orientation instruction.
             initial_image_path: Optional path to an initial image to include with the first message.
+            run_id: Optional run ID for logging.
 
         Returns:
             A tuple of (result, message).
         """
+        # Initialize the run logger for this run
+        self.run_logger = RunLogger(base_log_dir=self.log_dir, console=self.console, run_id=run_id)
+
         self.complete_tool.reset()
         if resume:
             assert self.dialog.is_user_turn()
@@ -516,10 +608,10 @@ try breaking down the task into smaller steps and call this tool multiple times.
                 # Log a message without the full base64 string
                 print(f"Created image URL for initial image (base64 data omitted)")
 
-                # Get the list of images
-                image_list = self.get_image_list()
+                # Get the simplified list of images for the VLM
+                image_list = self.get_image_list(simplified=True)
 
-                # Create a prompt with the image and instruction
+                # Create a prompt with the image, instruction, and image list
                 prompt = TextPrompt(text=f"{instruction}\n\n{image_list}")
                 prompt.image_url = img_url
 
@@ -531,20 +623,33 @@ try breaking down the task into smaller steps and call this tool multiple times.
                 self.last_image_path = initial_image_path
                 self.processed_images.add(str(initial_image_path))
 
+                # Log the user message with the image
+                self.run_logger.log_user_message(instruction, image_path=initial_image_path)
+
                 # Return early since we've already added the instruction with the image
                 tool_input = {"instruction": ""}
             except Exception as e:
                 print(f"Error including initial image: {str(e)}")
                 # Fall back to normal instruction without image
                 tool_input = {"instruction": instruction}
+                # Log the user message without image
+                self.run_logger.log_user_message(instruction)
         else:
             # Normal instruction without image
             tool_input = {"instruction": instruction}
+            # Log the user message without image
+            self.run_logger.log_user_message(instruction)
 
         if orientation_instruction:
             tool_input["orientation_instruction"] = orientation_instruction
 
-        return self.run(tool_input, self.dialog)
+        result = self.run(tool_input, self.dialog)
+
+        # Finalize the run logger
+        if self.run_logger:
+            self.run_logger.finalize_run()
+
+        return result
 
     def clear(self):
         self.dialog.clear()

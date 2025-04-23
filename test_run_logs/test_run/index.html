@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Agent Run: test_run</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background-color: white;
+            padding: 20px;
+            border-radius: 5px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+        }
+        h1, h2, h3 {
+            color: #333;
+        }
+        .turn {
+            margin-bottom: 30px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            padding: 15px;
+        }
+        .user-message {
+            background-color: #e6f7ff;
+            padding: 10px;
+            border-radius: 5px;
+            margin-bottom: 10px;
+        }
+        .model-message {
+            background-color: #f0f0f0;
+            padding: 10px;
+            border-radius: 5px;
+            margin-bottom: 10px;
+        }
+        .tool-call {
+            background-color: #fff8e1;
+            padding: 10px;
+            border-radius: 5px;
+            margin-bottom: 10px;
+            border-left: 3px solid #ffc107;
+        }
+        .tool-result {
+            background-color: #e8f5e9;
+            padding: 10px;
+            border-radius: 5px;
+            margin-bottom: 10px;
+            border-left: 3px solid #4caf50;
+        }
+        pre {
+            background-color: #f5f5f5;
+            padding: 10px;
+            border-radius: 3px;
+            overflow-x: auto;
+        }
+        img {
+            max-width: 100%;
+            height: auto;
+            border: 1px solid #ddd;
+            margin: 10px 0;
+        }
+        .image-container {
+            text-align: center;
+            margin: 15px 0;
+        }
+        .image-container img {
+            max-height: 400px;
+        }
+        .metadata {
+            font-size: 0.8em;
+            color: #666;
+            margin-top: 5px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Agent Run: test_run</h1>
+        <p>Started at: 2025-04-23 13:12:48</p>
+
+            <div class="summary">
+                <h2>Run Summary</h2>
+                <p>Test run completed successfully</p>
+            </div>
+            
+        <div id="conversation">
+<div class="turn" id="turn-1">
+<h2>Turn 1</h2>
+<div class="user-message">
+<h3>User Message</h3>
+<div class="image-container">
+<img src="images/turn_1_user_1.png" alt="User provided image">
+<div class="metadata">Image: turn_1_user_1.png</div>
+</div>
+<p>This is a test message with an image</p>
+</div>
+<div class="model-message">
+<h3>Model Response</h3>
+<p>I see a red square in the image.</p>
+</div>
+<div class="tool-call">
+<h3>Tool Call #1: test_tool</h3>
+<pre>
+{
+  "param1": "value1",
+  "param2": 42
+}
+</pre>
+</div>
+<div class="tool-result">
+<h3>Tool Result</h3>
+<div class="image-container">
+<img src="images/turn_1_tool_1_2.png" alt="Tool result image">
+<div class="metadata">Image: turn_1_tool_1_2.png</div>
+</div>
+<p>Tool executed successfully</p>
+</div>
+</div>
+<div class="turn" id="turn-2">
+<h2>Turn 2</h2>
+<div class="user-message">
+<h3>User Message</h3>
+<p>Another test message</p>
+</div>
+<div class="model-message">
+<h3>Model Response</h3>
+<p>I understand your request.</p>
+</div>
+</div>
+</div>
+</div>
+<p>This is a test message with an image</p>
+</div>
+<div class="model-message">
+<h3>Model Response</h3>
+<p>I see a red square in the image.</p>
+</div>
+<div class="tool-call">
+<h3>Tool Call #1: test_tool</h3>
+<pre>
+{
+  "param1": "value1",
+  "param2": 42
+}
+</pre>
+</div>
+<div class="tool-result">
+<h3>Tool Result</h3>
+<div class="image-container">
+<img src="images/turn_1_tool_1_2.png" alt="Tool result image">
+<div class="metadata">Image: turn_1_tool_1_2.png</div>
+</div>
+<p>Tool executed successfully</p>
+</div>
+</div>
+<div class="turn" id="turn-2">
+<h2>Turn 2</h2>
+<div class="user-message">
+<h3>User Message</h3>
+<p>Another test message</p>
+</div>
+</div>
+</div>
+</div>
+<p>This is a test message with an image</p>
+</div>
+<div class="model-message">
+<h3>Model Response</h3>
+<p>I see a red square in the image.</p>
+</div>
+<div class="tool-call">
+<h3>Tool Call #1: test_tool</h3>
+<pre>
+{
+  "param1": "value1",
+  "param2": 42
+}
+</pre>
+</div>
+<div class="tool-result">
+<h3>Tool Result</h3>
+<div class="image-container">
+<img src="images/turn_1_tool_1_2.png" alt="Tool result image">
+<div class="metadata">Image: turn_1_tool_1_2.png</div>
+</div>
+<p>Tool executed successfully</p>
+</div>
+</div>
+</div>
+</div>
+<p>This is a test message with an image</p>
+</div>
+<div class="model-message">
+<h3>Model Response</h3>
+<p>I see a red square in the image.</p>
+</div>
+<div class="tool-call">
+<h3>Tool Call #1: test_tool</h3>
+<pre>
+{
+  "param1": "value1",
+  "param2": 42
+}
+</pre>
+</div>
+</div>
+</div>
+</div>
+<p>This is a test message with an image</p>
+</div>
+<div class="model-message">
+<h3>Model Response</h3>
+<p>I see a red square in the image.</p>
+</div>
+</div>
+</div>
+</div>
+<p>This is a test message with an image</p>
+</div>
+</div>
+</div>
+    </div>
+</body>
+</html>
