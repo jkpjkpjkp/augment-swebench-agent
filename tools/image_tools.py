@@ -129,15 +129,29 @@ Example: To crop the top-left quarter of the image, use bbox=[0, 0, 500, 500]
                     tool_result_message=f"Error: Image not found at {image_path}",
                 )
 
-            # Get the image size
-            from utils.image_utils import get_image_size
-            img_width, img_height = get_image_size(image_path)
+            # Get the dimensions of the CURRENT VIEW being displayed, not the original image
+            if hasattr(self, "current_view_size"):
+                img_width, img_height = self.current_view_size
+            else:
+                # If no current view is set, fall back to original image dimensions
+                from utils.image_utils import get_image_size
+                img_width, img_height = get_image_size(image_path)
 
             # Convert normalized coordinates [0, 1000] to pixel coordinates
+            # These coordinates are now relative to the current view
             pixel_x1 = int(x1 * img_width / 1000)
             pixel_y1 = int(y1 * img_height / 1000)
             pixel_x2 = int(x2 * img_width / 1000)
             pixel_y2 = int(y2 * img_height / 1000)
+
+            # If this is a view (not original image), adjust coordinates relative to parent view
+            if hasattr(self, "current_view_coords"):
+                parent_x1, parent_y1, _, _ = self.current_view_coords
+                # Adjust coordinates relative to parent view's position
+                pixel_x1 += parent_x1
+                pixel_y1 += parent_y1
+                pixel_x2 += parent_x1
+                pixel_y2 += parent_y1
 
             # Ensure coordinates are within image bounds
             pixel_x1 = max(0, min(pixel_x1, img_width - 1))
@@ -158,13 +172,20 @@ Example: To crop the top-left quarter of the image, use bbox=[0, 0, 500, 500]
                         if v.view_path == image_path:
                             # Found the view
                             view_x1, view_y1, view_x2, view_y2 = v.coordinates
-                            # Adjust coordinates relative to the original image
+
+                            # CRITICAL FIX: The coordinates are already relative to the current view
+                            # We need to adjust them to be relative to the original image
+                            # by adding the current view's coordinates
                             adjusted_coords = (
-                                view_x1 + pixel_x1,
-                                view_y1 + pixel_y1,
-                                view_x1 + pixel_x2,
-                                view_y1 + pixel_y2,
+                                view_x1 + pixel_x1,  # Add current view's x1 offset
+                                view_y1 + pixel_y1,  # Add current view's y1 offset
+                                view_x1 + pixel_x2,  # Add current view's x1 offset (not x2)
+                                view_y1 + pixel_y2,  # Add current view's y1 offset (not y2)
                             )
+
+                            # Log the adjustment for debugging
+                            print(f"CropTool: Adjusting coordinates from {coordinates} to {adjusted_coords} relative to original image")
+
                             view_path = self.image_manager.create_view(
                                 orig_path, view_id, adjusted_coords
                             )
@@ -178,7 +199,7 @@ Example: To crop the top-left quarter of the image, use bbox=[0, 0, 500, 500]
                         tool_result_message=f"Error: Could not find view information for {image_path}",
                     )
             else:
-                # It's an original image
+                # It's an original image - no adjustment needed
                 view_path = self.image_manager.create_view(image_path, view_id, coordinates)
 
             # Get information about the created view
@@ -509,192 +530,69 @@ The smallest remaining view (with the least number of pixels) is identified for 
         Returns:
             ToolImplOutput containing the result of the operation
         """
-        image_path = Path(tool_input["image_path"])
-
-        # Resolve the image path
-        original_path = image_path
-
-        # If it's already a Path object, convert to string first
-        if isinstance(image_path, Path):
-            image_path = str(image_path)
-
-        image_path = Path(image_path)
-
-        # Check if this is a view ID rather than a path
-        path_str = str(image_path)
-        view_found = False
-
-        # Try to find a view with this ID
-        for img_path, views in self.image_manager.image_views.items():
-            if path_str in views:
-                image_path = views[path_str].view_path
-                view_found = True
-                break
-
-        if not view_found and not image_path.is_absolute():
-            # Try different possible paths
-            possible_paths = [
-                image_path,  # As is
-                self.workspace_manager.root / image_path,  # Relative to workspace root
-                self.workspace_manager.root / "images" / image_path.name,  # In images directory
-                self.workspace_manager.root / "views" / image_path.name,  # In views directory
-            ]
-
-            # Try each path
-            for path in possible_paths:
-                if path.exists():
-                    image_path = path
-                    break
-
-        # Debug output
-        print(f"BlackoutTool: Original path: {original_path}, Resolved path: {image_path}")
+        image_path = tool_input["image_path"]
+        
+        # Ensure path is relative to workspace
+        if not image_path.startswith('/'):
+            image_path = str(self.workspace_manager.get_views_dir() / image_path)
+        
+        # Check if image exists
+        if not Path(image_path).exists():
+            return ToolImplOutput(
+                tool_output=f"Error blacking out image: Image not found: {image_path}",
+                tool_result_message="Failed to black out image - not found"
+            )
 
         try:
-            # Check if the image exists
-            if not image_path.exists():
+            # Register the view if it's not already registered
+            if image_path.endswith('.png'):
+                view_name = Path(image_path).name
+                original_image = view_name.split('__')[0] + '.png'
+                original_path = str(self.workspace_manager.get_images_dir() / original_image)
+                
+                # Parse coordinates from view name
+                coords_str = view_name.split('__')[-1].replace('.png', '')
+                coords = [int(x) for x in coords_str.split('_')]
+                
+                # Register view if not already registered
+                if not self.image_manager.is_view_registered(image_path):
+                    self.image_manager.register_view(
+                        original_path,
+                        image_path,
+                        coords
+                    )
+
+            # Proceed with blackout
+            if self.image_manager.is_view(image_path):
+                updated_paths = self.image_manager.blackout_view(image_path)
                 return ToolImplOutput(
-                    tool_output=f"Error: Image not found at {image_path}",
-                    tool_result_message=f"Error: Image not found at {image_path}",
+                    tool_output=f"Blacked out view at {image_path}\n"
+                               f"Updated {len(updated_paths)} images/views",
+                    tool_result_message=f"Blacked out view at {image_path}"
                 )
-
-            # Check if coordinates are provided for partial blackout
-            x1 = tool_input.get("x1")
-            y1 = tool_input.get("y1")
-            x2 = tool_input.get("x2")
-            y2 = tool_input.get("y2")
-
-            # If coordinates are provided, black out just that region
-            if x1 is not None and y1 is not None and x2 is not None and y2 is not None:
-                # Load the image
-                img = load_image(image_path)
-
-                # Create a black rectangle for the specified region
-                draw = ImageDraw.Draw(img)
-                draw.rectangle([(x1, y1), (x2, y2)], fill=(0, 0, 0))
-
-                # Save the image
-                save_image(img, image_path)
-
-                # Check if this is a view
-                is_view = image_path.parent == self.image_manager.views_dir
-
-                if is_view:
-                    # Find the original image and update it
-                    for img_path, views in self.image_manager.image_views.items():
-                        for v_id, v in views.items():
-                            if v.view_path == image_path:
-                                # Found the view
-                                # Adjust coordinates relative to the original image
-                                orig_x1 = v.coordinates[0] + x1
-                                orig_y1 = v.coordinates[1] + y1
-                                orig_x2 = v.coordinates[0] + x2
-                                orig_y2 = v.coordinates[1] + y2
-
-                                # Load the original image
-                                orig_img = load_image(img_path)
-
-                                # Create a black rectangle for the specified region
-                                draw = ImageDraw.Draw(orig_img)
-                                draw.rectangle([(orig_x1, orig_y1), (orig_x2, orig_y2)], fill=(0, 0, 0))
-
-                                # Save the original image
-                                save_image(orig_img, img_path)
-
-                                # Update all other views that overlap with this region
-                                for other_v_id, other_v in views.items():
-                                    if other_v.view_path != image_path:
-                                        # Check if this view overlaps with the blacked out region
-                                        other_x1, other_y1, other_x2, other_y2 = other_v.coordinates
-
-                                        # Check for overlap
-                                        if (orig_x1 < other_x2 and orig_x2 > other_x1 and
-                                            orig_y1 < other_y2 and orig_y2 > other_y1):
-                                            # There's overlap, update this view
-                                            other_img = load_image(other_v.view_path)
-
-                                            # Calculate the overlapping region in this view's coordinates
-                                            overlap_x1 = max(0, orig_x1 - other_x1)
-                                            overlap_y1 = max(0, orig_y1 - other_y1)
-                                            overlap_x2 = min(other_x2 - other_x1, orig_x2 - other_x1)
-                                            overlap_y2 = min(other_y2 - other_y1, orig_y2 - other_y1)
-
-                                            # Create a black rectangle for the overlapping region
-                                            draw = ImageDraw.Draw(other_img)
-                                            draw.rectangle([(overlap_x1, overlap_y1), (overlap_x2, overlap_y2)], fill=(0, 0, 0))
-
-                                            # Save the view
-                                            save_image(other_img, other_v.view_path)
-                                break
-
-                    return ToolImplOutput(
-                        tool_output=f"Blacked out region ({x1}, {y1}, {x2}, {y2}) in view at {image_path}",
-                        tool_result_message=f"Blacked out region in view at {image_path}",
-                    )
-                else:
-                    # It's an original image, update all views that overlap with this region
-                    for view_id, view in self.image_manager.image_views.get(image_path, {}).items():
-                        # Check if this view overlaps with the blacked out region
-                        view_x1, view_y1, view_x2, view_y2 = view.coordinates
-
-                        # Check for overlap
-                        if (x1 < view_x2 and x2 > view_x1 and y1 < view_y2 and y2 > view_y1):
-                            # There's overlap, update this view
-                            view_img = load_image(view.view_path)
-
-                            # Calculate the overlapping region in this view's coordinates
-                            overlap_x1 = max(0, x1 - view_x1)
-                            overlap_y1 = max(0, y1 - view_y1)
-                            overlap_x2 = min(view_x2 - view_x1, x2 - view_x1)
-                            overlap_y2 = min(view_y2 - view_y1, y2 - view_y1)
-
-                            # Create a black rectangle for the overlapping region
-                            draw = ImageDraw.Draw(view_img)
-                            draw.rectangle([(overlap_x1, overlap_y1), (overlap_x2, overlap_y2)], fill=(0, 0, 0))
-
-                            # Save the view
-                            save_image(view_img, view.view_path)
-
-                    return ToolImplOutput(
-                        tool_output=f"Blacked out region ({x1}, {y1}, {x2}, {y2}) in image at {image_path}",
-                        tool_result_message=f"Blacked out region in image at {image_path}",
-                    )
             else:
-                # No coordinates provided, black out the entire image/view
-                # Check if this is a view
-                is_view = image_path.parent == self.image_manager.views_dir
-
-                if is_view:
-                    # Black out the view
-                    updated_paths = self.image_manager.blackout_view(image_path)
-
-                    return ToolImplOutput(
-                        tool_output=f"Blacked out view at {image_path}\n"
-                                   f"Updated {len(updated_paths)} images/views",
-                        tool_result_message=f"Blacked out view at {image_path}",
-                    )
-                else:
-                    # It's an original image, create a black image of the same size
-                    img = load_image(image_path)
-                    black_img = Image.new('RGB', img.size, (0, 0, 0))
-                    save_image(black_img, image_path)
-
-                    # Update all views of this image
-                    for view_id, view in self.image_manager.image_views.get(image_path, {}).items():
-                        black_view = Image.new('RGB', (
-                            view.coordinates[2] - view.coordinates[0],
-                            view.coordinates[3] - view.coordinates[1]
-                        ), (0, 0, 0))
-                        save_image(black_view, view.view_path)
-
-                    return ToolImplOutput(
-                        tool_output=f"Blacked out image at {image_path} and all its views",
-                        tool_result_message=f"Blacked out image at {image_path}",
-                    )
+                # Handle original image blackout
+                img = load_image(image_path)
+                black_img = Image.new('RGB', img.size, (0, 0, 0))
+                save_image(black_img, image_path)
+                
+                # Update all related views
+                for view_id, view in self.image_manager.image_views.get(image_path, {}).items():
+                    black_view = Image.new('RGB', (
+                        view.coordinates[2] - view.coordinates[0],
+                        view.coordinates[3] - view.coordinates[1]
+                    ), (0, 0, 0))
+                    save_image(black_view, view.view_path)
+                
+                return ToolImplOutput(
+                    tool_output=f"Blacked out image at {image_path}",
+                    tool_result_message=f"Blacked out image at {image_path}"
+                )
 
         except Exception as e:
             return ToolImplOutput(
                 tool_output=f"Error blacking out image: {str(e)}",
-                tool_result_message=f"Error blacking out image: {str(e)}",
+                tool_result_message="Failed to black out image"
             )
 
     def get_tool_start_message(self, tool_input: Dict[str, Any]) -> str:
