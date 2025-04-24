@@ -20,8 +20,6 @@ from utils.common import (
 from utils.workspace_manager import WorkspaceManager
 from utils.image_manager import ImageManager
 from utils.image_utils import (
-    load_image,
-    save_image,
     get_image_size,
 )
 from PIL import Image
@@ -388,7 +386,7 @@ After switching to an image, you can create views (crops) of specific regions us
             # Return basic image information and encode the image as base64
             try:
                 # Load the image and convert to base64
-                img = load_image(image_path)
+                img = Image.open(image_path)
                 buffered = BytesIO()
                 img.save(buffered, format="PNG")
                 img_base64 = base64.b64encode(buffered.getvalue()).decode("utf-8")
@@ -590,7 +588,7 @@ The smallest remaining view (with the least number of pixels) is identified for 
                 )
             else:
                 # Handle original image blackout
-                img = load_image(image_path)
+                img = Image.open(image_path)
                 black_img = Image.new('RGB', img.size, (0, 0, 0))
                 black_img.save(image_path)
 
@@ -623,193 +621,3 @@ The smallest remaining view (with the least number of pixels) is identified for 
             A message describing the operation
         """
         return f"Blacking out image at {tool_input['image_path']}"
-
-
-class AddImageTool(LLMTool):
-    """Tool for adding a new image to the workspace."""
-
-    name = "add_image"
-    description = """Add a new image to the workspace.
-
-This tool allows you to add a new image to the workspace for VQA analysis.
-The image must be accessible from the local filesystem.
-"""
-    input_schema = {
-        "type": "object",
-        "properties": {
-            "image_path": {
-                "type": "string",
-                "description": "Path to the image to add.",
-            },
-            "image_name": {
-                "type": "string",
-                "description": "Optional name for the image. If not provided, the original filename will be used.",
-            },
-        },
-        "required": ["image_path"],
-    }
-
-    def __init__(self, workspace_manager: WorkspaceManager):
-        """Initialize the add image tool.
-
-        Args:
-            workspace_manager: Workspace manager for resolving paths
-        """
-        super().__init__()
-        self.workspace_manager = workspace_manager
-        self.image_manager = ImageManager(workspace_manager.root)
-
-    def run_impl(
-        self,
-        tool_input: Dict[str, Any],
-        dialog_messages: Optional[DialogMessages] = None,
-    ) -> ToolImplOutput:
-        """Implement the add image tool.
-
-        Args:
-            tool_input: Dictionary containing the tool input parameters
-            dialog_messages: Optional dialog messages for context
-
-        Returns:
-            ToolImplOutput containing the result of the operation
-        """
-        image_path = Path(tool_input["image_path"])
-        image_name = tool_input.get("image_name")
-
-        # Resolve the image path
-        original_path = image_path
-        if not image_path.is_absolute():
-            image_path = self.workspace_manager.workspace_path(image_path)
-
-        # Debug output
-        print(f"AddImageTool: Original path: {original_path}, Resolved path: {image_path}")
-
-        try:
-            # Check if the image exists
-            if not image_path.exists():
-                return ToolImplOutput(
-                    tool_output=f"Error: Image not found at {image_path}",
-                    tool_result_message=f"Error: Image not found at {image_path}",
-                )
-
-            # Add the image to the workspace
-            dest_path = self.image_manager.add_image(image_path, image_name)
-
-            # Get image size
-            size = get_image_size(dest_path)
-
-            return ToolImplOutput(
-                tool_output=f"Added image to workspace at {dest_path}\n"
-                           f"Size: {size[0]}x{size[1]}",
-                tool_result_message=f"Added image to workspace at {dest_path}",
-            )
-
-        except Exception as e:
-            return ToolImplOutput(
-                tool_output=f"Error adding image: {str(e)}",
-                tool_result_message=f"Error adding image: {str(e)}",
-            )
-
-    def get_tool_start_message(self, tool_input: Dict[str, Any]) -> str:
-        """Get a message to display when the tool starts.
-
-        Args:
-            tool_input: Dictionary containing the tool input parameters
-
-        Returns:
-            A message describing the operation
-        """
-        return f"Adding image from {tool_input['image_path']} to workspace"
-
-
-class ListImagesTool(LLMTool):
-    """Tool for listing images and views in the workspace."""
-
-    name = "list_images"
-    description = """List all images and views in the workspace.
-
-This tool allows you to list all original images and their views in the workspace.
-"""
-    input_schema = {
-        "type": "object",
-        "properties": {
-            "show_views": {
-                "type": "boolean",
-                "description": "Whether to show views in addition to original images.",
-                "default": True,
-            },
-        },
-        "required": [],
-    }
-
-    def __init__(self, workspace_manager: WorkspaceManager):
-        """Initialize the list images tool.
-
-        Args:
-            workspace_manager: Workspace manager for resolving paths
-        """
-        super().__init__()
-        self.workspace_manager = workspace_manager
-        self.image_manager = ImageManager(workspace_manager.root)
-
-    def run_impl(
-        self,
-        tool_input: Dict[str, Any],
-        dialog_messages: Optional[DialogMessages] = None,
-    ) -> ToolImplOutput:
-        """Implement the list images tool.
-
-        Args:
-            tool_input: Dictionary containing the tool input parameters
-            dialog_messages: Optional dialog messages for context
-
-        Returns:
-            ToolImplOutput containing the result of the operation
-        """
-        show_views = tool_input.get("show_views", True)
-
-        try:
-            # List original images
-            images = self.image_manager.list_images()
-
-            if not images:
-                return ToolImplOutput(
-                    tool_output="No images found in the workspace.",
-                    tool_result_message="No images found in the workspace.",
-                )
-
-            result = "Images in workspace:\n"
-
-            for img_path in images:
-                size = get_image_size(img_path)
-                result += f"- {img_path.name} ({size[0]}x{size[1]})\n"
-
-                if show_views:
-                    views = self.image_manager.list_views(img_path)
-                    if views:
-                        result += "  Views:\n"
-                        for view_path in views:
-                            view_info = self.image_manager.get_view_info(view_path)
-                            result += f"  - {view_path.name} ({view_info['size'][0]}x{view_info['size'][1]}) - Coordinates: {view_info['coordinates']}\n"
-
-            return ToolImplOutput(
-                tool_output=result,
-                tool_result_message=f"Listed {len(images)} images in workspace",
-            )
-
-        except Exception as e:
-            return ToolImplOutput(
-                tool_output=f"Error listing images: {str(e)}",
-                tool_result_message=f"Error listing images: {str(e)}",
-            )
-
-    def get_tool_start_message(self, tool_input: Dict[str, Any]) -> str:
-        """Get a message to display when the tool starts.
-
-        Args:
-            tool_input: Dictionary containing the tool input parameters
-
-        Returns:
-            A message describing the operation
-        """
-        return "Listing images in workspace"

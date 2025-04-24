@@ -21,8 +21,7 @@ def crop_image(
     if isinstance(image, Path):
         image = Image.open(image)
 
-    x1, y1, x2, y2 = coordinates
-    return image.crop((x1, y1, x2, y2))
+    return image.crop(coordinates)
 
 def blackout_region(
     image: Union[Image.Image, Path],
@@ -56,39 +55,6 @@ def blackout_region(
 
     # Draw a black rectangle over the region
     draw.rectangle(coordinates, fill=(0, 0, 0))
-
-    return result
-
-def highlight_region(
-    image: Union[Image.Image, Path],
-    coordinates: Tuple[int, int, int, int],
-    color: Tuple[int, int, int] = (255, 0, 0),
-    width: int = 2
-) -> Image.Image:
-    """Highlight a region in an image by drawing a colored rectangle.
-
-    Args:
-        image: Image or path to image
-        coordinates: Region to highlight (x1, y1, x2, y2)
-        color: RGB color for the highlight
-        width: Width of the highlight border
-
-    Returns:
-        Image with the highlighted region
-    """
-    if isinstance(image, Path):
-        image = Image.open(image)
-
-    # Create a copy of the image
-    result = image.copy()
-
-    # Create a drawing context
-    draw = ImageDraw.Draw(result)
-
-    # Draw a rectangle around the region
-    x1, y1, x2, y2 = coordinates
-    for i in range(width):
-        draw.rectangle((x1+i, y1+i, x2-i, y2-i), outline=color)
 
     return result
 

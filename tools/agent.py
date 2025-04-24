@@ -23,7 +23,6 @@ from tools.image_tools import (
     CropTool,
     SwitchImageTool,
     BlackoutTool,
-    AddImageTool,
 )
 
 
@@ -108,13 +107,11 @@ try breaking down the task into smaller steps and call this tool multiple times.
         self.complete_tool = CompleteTool()
 
         self.tools = [
-            StrReplaceEditorTool(workspace_manager=workspace_manager),
             SequentialThinkingTool(),
             # Image tools for VQA
             CropTool(workspace_manager=workspace_manager),
             SwitchImageTool(workspace_manager=workspace_manager),
             BlackoutTool(workspace_manager=workspace_manager),
-            AddImageTool(workspace_manager=workspace_manager),
             self.complete_tool,
         ]
 
@@ -274,13 +271,16 @@ try breaking down the task into smaller steps and call this tool multiple times.
                     # No tools were called, so default to blackout tool if the original image is not all black
                     if self.last_image_path:
                         try:
+                            # Import locally to avoid scope issues
                             from PIL import Image
                             import numpy as np
 
                             # Check if the image is all black
-                            img = Image.open(self.last_image_path)
-                            img_array = np.array(img)
-                            if np.mean(img_array) < 1.0:  # Image is essentially all black
+                            with Image.open(self.last_image_path) as img:
+                                img_array = np.array(img)
+                                is_black = np.mean(img_array) < 1.0  # Image is essentially all black
+
+                            if is_black:
                                 # If image is all black, complete the task
                                 self.logger_for_agent_logs.info("[image is all black, completing task]")
                                 return ToolImplOutput(
@@ -402,31 +402,10 @@ try breaking down the task into smaller steps and call this tool multiple times.
                                 self.last_image_path = view_path
 
                                 # Load the image and send it to the model
-                                try:
-                                    # Import modules inside the function to avoid scope issues
-                                    from PIL import Image
-                                    from io import BytesIO
-                                    import base64
+                                # Process the image using our helper method
+                                img_url, error = self._process_image_to_base64(view_path)
 
-                                    # Load the image
-                                    img = Image.open(view_path)
-
-                                    # Crop to remove black regions
-                                    from utils.image_utils import crop_to_remove_black_regions
-                                    img = crop_to_remove_black_regions(img)
-
-                                    # Resize if needed
-                                    max_size = (1500, 1500)
-                                    if img.width > max_size[0] or img.height > max_size[1]:
-                                        ratio = min(max_size[0] / img.width, max_size[1] / img.height)
-                                        new_size = (int(img.width * ratio), int(img.height * ratio))
-                                        img = img.resize(new_size, Image.LANCZOS)
-
-                                    # Convert to base64
-                                    buffered = BytesIO()
-                                    img.save(buffered, format="PNG")
-                                    img_base64 = base64.b64encode(buffered.getvalue()).decode("utf-8")
-                                    img_url = f"data:image/png;base64,{img_base64}"
+                                if img_url:
                                     # Log a message without the full base64 string
                                     print("Created image URL for cropped view (base64 data omitted)")
 
@@ -438,8 +417,8 @@ try breaking down the task into smaller steps and call this tool multiple times.
                                     prompt.image_url = img_url
                                     # Add the image to the dialog
                                     self.dialog._message_lists.append([prompt])
-                                except Exception as e:
-                                    print(f"Error processing cropped image: {str(e)}")
+                                else:
+                                    print(f"Error processing cropped image: {error}")
 
                             # Clean the tool result for the VLM
                             cleaned_result = clean_tool_result(tool_call.tool_name, tool_result, self.workspace_manager.root)
@@ -463,31 +442,10 @@ try breaking down the task into smaller steps and call this tool multiple times.
                                 self.last_image_path = view_path
 
                                 # Load the image and send it to the model
-                                try:
-                                    # Import modules inside the function to avoid scope issues
-                                    from PIL import Image
-                                    from io import BytesIO
-                                    import base64
+                                # Process the image using our helper method
+                                img_url, error = self._process_image_to_base64(view_path)
 
-                                    # Load the image
-                                    img = Image.open(view_path)
-
-                                    # Crop to remove black regions
-                                    from utils.image_utils import crop_to_remove_black_regions
-                                    img = crop_to_remove_black_regions(img)
-
-                                    # Resize if needed
-                                    max_size = (1500, 1500)
-                                    if img.width > max_size[0] or img.height > max_size[1]:
-                                        ratio = min(max_size[0] / img.width, max_size[1] / img.height)
-                                        new_size = (int(img.width * ratio), int(img.height * ratio))
-                                        img = img.resize(new_size, Image.LANCZOS)
-
-                                    # Convert to base64
-                                    buffered = BytesIO()
-                                    img.save(buffered, format="PNG")
-                                    img_base64 = base64.b64encode(buffered.getvalue()).decode("utf-8")
-                                    img_url = f"data:image/png;base64,{img_base64}"
+                                if img_url:
                                     # Log a message without the full base64 string
                                     print("Created image URL for blacked out view (base64 data omitted)")
 
@@ -499,8 +457,8 @@ try breaking down the task into smaller steps and call this tool multiple times.
                                     prompt.image_url = img_url
                                     # Add the image to the dialog
                                     self.dialog._message_lists.append([prompt])
-                                except Exception as e:
-                                    print(f"Error processing blacked out image: {str(e)}")
+                                else:
+                                    print(f"Error processing blacked out image: {error}")
 
                             # Clean the tool result for the VLM
                             cleaned_result = clean_tool_result(tool_call.tool_name, tool_result, self.workspace_manager.root)
@@ -666,30 +624,12 @@ try breaking down the task into smaller steps and call this tool multiple times.
         # If an initial image is provided, include it with the first message
         if initial_image_path is not None and not resume:
             try:
-                # Import modules inside the function to avoid scope issues
-                from PIL import Image
-                from io import BytesIO
-                import base64
+                # Process the image using our helper method
+                img_url, error = self._process_image_to_base64(initial_image_path)
 
-                # Load the image
-                img = Image.open(initial_image_path)
+                if not img_url:
+                    raise Exception(error)
 
-                # Crop to remove black regions
-                from utils.image_utils import crop_to_remove_black_regions
-                img = crop_to_remove_black_regions(img)
-
-                # Resize if needed
-                max_size = (1500, 1500)
-                if img.width > max_size[0] or img.height > max_size[1]:
-                    ratio = min(max_size[0] / img.width, max_size[1] / img.height)
-                    new_size = (int(img.width * ratio), int(img.height * ratio))
-                    img = img.resize(new_size, Image.LANCZOS)
-
-                # Convert to base64
-                buffered = BytesIO()
-                img.save(buffered, format="PNG")
-                img_base64 = base64.b64encode(buffered.getvalue()).decode("utf-8")
-                img_url = f"data:image/png;base64,{img_base64}"
                 # Log a message without the full base64 string
                 print("Created image URL for initial image (base64 data omitted)")
 
@@ -998,6 +938,48 @@ try breaking down the task into smaller steps and call this tool multiple times.
                 self.logger_for_agent_logs.info(f"Error parsing code block: {str(e)}")
 
         return tool_calls
+
+    def _process_image_to_base64(self, image_path):
+        """Process an image and convert it to base64 for display.
+
+        Args:
+            image_path: Path to the image file
+
+        Returns:
+            Tuple of (image_url, error_message)
+            image_url will be None if there was an error
+            error_message will be None if there was no error
+        """
+        try:
+            # Import all required modules locally to avoid scope issues
+            from PIL import Image
+            from io import BytesIO
+            import base64
+            from utils.image_utils import crop_to_remove_black_regions
+
+            # Load the image
+            img = Image.open(image_path)
+
+            # Crop to remove black regions
+            img = crop_to_remove_black_regions(img)
+
+            # Resize if needed
+            max_size = (1500, 1500)
+            if img.width > max_size[0] or img.height > max_size[1]:
+                ratio = min(max_size[0] / img.width, max_size[1] / img.height)
+                new_size = (int(img.width * ratio), int(img.height * ratio))
+                img = img.resize(new_size, Image.LANCZOS)
+
+            # Convert to base64
+            buffered = BytesIO()
+            img.save(buffered, format="PNG")
+            img_base64 = base64.b64encode(buffered.getvalue()).decode("utf-8")
+            img_url = f"data:image/png;base64,{img_base64}"
+
+            return img_url, None
+        except Exception as e:
+            error_message = f"Error processing image: {str(e)}"
+            return None, error_message
 
     def clear(self):
         self.dialog.clear()
