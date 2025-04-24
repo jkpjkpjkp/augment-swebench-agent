@@ -92,10 +92,10 @@ try breaking down the task into smaller steps and call this tool multiple times.
         self.run_logger = None  # Will be initialized for each run
         self.log_dir = log_dir
 
-        # Track the last image sent to the model
-        self.last_image_path = None
-        # Track the image paths that have been processed
-        self.processed_images = set()
+        # Track the original image path
+        self.original_image_path = None
+        # Track the current view coordinates
+        self.current_view_coordinates = None
         self.max_recent_calls = 5
 
         self.dialog = DialogMessages(
@@ -265,15 +265,23 @@ try breaking down the task into smaller steps and call this tool multiple times.
 
                 if len(pending_tool_calls) == 0:
                     # No tools were called, so default to blackout tool if the original image is not all black
-                    if self.last_image_path:
+                    if self.original_image_path:
                         try:
                             # Import locally to avoid scope issues
                             from PIL import Image
                             import numpy as np
 
                             # Check if the image is all black
-                            with Image.open(self.last_image_path) as img:
-                                img_array = np.array(img)
+                            with Image.open(self.original_image_path) as img:
+                                # If we have current view coordinates, check only that region
+                                if self.current_view_coordinates:
+                                    x1, y1, x2, y2 = self.current_view_coordinates
+                                    # Coordinates are already in pixels
+                                    view = img.crop((x1, y1, x2, y2))
+                                    img_array = np.array(view)
+                                else:
+                                    img_array = np.array(img)
+
                                 is_black = np.mean(img_array) < 1.0  # Image is essentially all black
 
                             if is_black:
@@ -287,7 +295,21 @@ try breaking down the task into smaller steps and call this tool multiple times.
                                 # If image is not all black, use blackout tool
                                 self.logger_for_agent_logs.info("[no tools were called, defaulting to blackout tool]")
                                 blackout_tool = next(t for t in self.tools if t.name == "blackout_image")
-                                tool_input = {"image_path": str(self.last_image_path)}
+
+                                # If we have current view coordinates, blackout that region
+                                if self.current_view_coordinates:
+                                    # Create a virtual path for the current view
+                                    from utils.image_manager import ImageView
+                                    view_obj = ImageView(
+                                        view_id="current_view",
+                                        original_image_path=self.original_image_path,
+                                        coordinates=self.current_view_coordinates
+                                    )
+                                    tool_input = {"image_path": str(view_obj.view_path)}
+                                else:
+                                    # Blackout the entire image
+                                    tool_input = {"image_path": str(self.original_image_path)}
+
                                 result = blackout_tool.run(tool_input, deepcopy(self.dialog))
                                 return ToolImplOutput(
                                     tool_output=result,
@@ -353,11 +375,19 @@ try breaking down the task into smaller steps and call this tool multiple times.
                             path_match = re.search(r"Switched to image at ([^\n]+)", tool_result)
                             if path_match:
                                 image_path = Path(path_match.group(1))
-                                self.last_image_path = image_path
+                                # Set as the original image
+                                self.original_image_path = image_path
+                                self.dialog.original_image_path = image_path
+                                # Reset view coordinates when switching images
+                                self.current_view_coordinates = None
+                                self.dialog.current_view_coordinates = None
 
                             # Check if we have aux_data with the image URL
                             if hasattr(result, 'aux_data') and result.aux_data and 'image_url' in result.aux_data:
                                 image_url = result.aux_data['image_url']
+                                # Set the original image URL
+                                self.dialog.original_image = image_url
+
                                 # Get the simplified list of images for the VLM
                                 image_list = self.get_image_list(simplified=True)
 
@@ -366,8 +396,7 @@ try breaking down the task into smaller steps and call this tool multiple times.
                                 prompt.image_url = image_url
                                 # Add the image to the dialog
                                 self.dialog._message_lists.append([prompt])
-                                # Set the last_image on the dialog for use in get_messages_for_llm_client
-                                self.dialog.last_image = image_url
+
                                 # Clean the tool result for the VLM
                                 cleaned_result = clean_tool_result(tool_call.tool_name, tool_result, self.workspace_manager.root)
 
@@ -375,8 +404,8 @@ try breaking down the task into smaller steps and call this tool multiple times.
                                 self.dialog.add_tool_call_result(tool_call, cleaned_result)
 
                                 # Log the tool result with the image
-                                if self.run_logger and self.last_image_path:
-                                    self.run_logger.log_tool_result(tool_result, image_path=self.last_image_path)
+                                if self.run_logger and self.original_image_path:
+                                    self.run_logger.log_tool_result(tool_result, image_path=self.original_image_path)
                             else:
                                 # Clean the tool result for the VLM
                                 cleaned_result = clean_tool_result(tool_call.tool_name, tool_result, self.workspace_manager.root)
@@ -386,39 +415,44 @@ try breaking down the task into smaller steps and call this tool multiple times.
 
                                 # Log the tool result with the image if available
                                 if self.run_logger:
-                                    if self.last_image_path:
-                                        self.run_logger.log_tool_result(tool_result, image_path=self.last_image_path)
+                                    if self.original_image_path:
+                                        self.run_logger.log_tool_result(tool_result, image_path=self.original_image_path)
                                     else:
                                         self.run_logger.log_tool_result(tool_result)
 
                         # For crop_image tool
                         elif tool_call.tool_name == "crop_image":
-                            # Extract the new view path
-                            path_match = re.search(r"Created new view at ([^\n]+)", tool_result)
-                            if path_match:
-                                view_path = Path(path_match.group(1))
-                                self.last_image_path = view_path
+                            # Extract the bbox coordinates from the tool input
+                            bbox = tool_call.tool_input.get("bbox", [0, 0, 1000, 1000])
 
-                                # Load the image and send it to the model
-                                # Process the image using our helper method
-                                img_url, error = self._process_image_to_base64(view_path)
+                            # Convert normalized coordinates [0, 1000] to pixel coordinates
+                            if self.original_image_path:
+                                from PIL import Image
+                                img = Image.open(self.original_image_path)
+                                img_width, img_height = img.size
 
-                                if img_url:
-                                    # Log a message without the full base64 string
-                                    print("Created image URL for cropped view (base64 data omitted)")
+                                x1, y1, x2, y2 = bbox
+                                pixel_x1 = int(x1 * img_width / 1000)
+                                pixel_y1 = int(y1 * img_height / 1000)
+                                pixel_x2 = int(x2 * img_width / 1000)
+                                pixel_y2 = int(y2 * img_height / 1000)
 
-                                    # Get the simplified list of images for the VLM
-                                    image_list = self.get_image_list(simplified=True)
+                                # Store the current view coordinates in pixels
+                                self.current_view_coordinates = (pixel_x1, pixel_y1, pixel_x2, pixel_y2)
+                                self.dialog.current_view_coordinates = (pixel_x1, pixel_y1, pixel_x2, pixel_y2)
+                            else:
+                                # If no original image, just store the normalized coordinates
+                                self.current_view_coordinates = bbox
+                                self.dialog.current_view_coordinates = bbox
 
-                                    # Create a new user prompt with the image
-                                    prompt = TextPrompt(text="Here's the cropped view I requested. Let me analyze it.")
-                                    prompt.image_url = img_url
-                                    # Add the image to the dialog
-                                    self.dialog._message_lists.append([prompt])
-                                    # Set the last_image on the dialog for use in get_messages_for_llm_client
-                                    self.dialog.last_image = img_url
-                                else:
-                                    print(f"Error processing cropped image: {error}")
+                            # Get the simplified list of images for the VLM
+                            image_list = self.get_image_list(simplified=True)
+
+                            # Create a new user prompt with the cropped image
+                            # The actual cropping happens in get_messages_for_llm_client
+                            prompt = TextPrompt(text="Here's the cropped view I requested. Let me analyze it.")
+                            # Add the prompt to the dialog
+                            self.dialog._message_lists.append([prompt])
 
                             # Clean the tool result for the VLM
                             cleaned_result = clean_tool_result(tool_call.tool_name, tool_result, self.workspace_manager.root)
@@ -427,40 +461,43 @@ try breaking down the task into smaller steps and call this tool multiple times.
                             self.dialog.add_tool_call_result(tool_call, cleaned_result)
 
                             # Log the tool result with the image if available
-                            if self.run_logger:
-                                if self.last_image_path:
-                                    self.run_logger.log_tool_result(tool_result, image_path=self.last_image_path)
-                                else:
-                                    self.run_logger.log_tool_result(tool_result)
+                            if self.run_logger and self.original_image_path:
+                                self.run_logger.log_tool_result(tool_result, image_path=self.original_image_path)
+                            else:
+                                self.run_logger.log_tool_result(tool_result)
 
                         # For blackout_image tool
                         elif tool_call.tool_name == "blackout_image":
-                            # Extract the blacked out view path
-                            path_match = re.search(r"Blacked out (view|image) at ([^\n]+)", tool_result)
-                            if path_match:
-                                view_path = Path(path_match.group(2))
-                                self.last_image_path = view_path
+                            # Get the image path from the tool input
+                            image_path = tool_call.tool_input.get("image_path", "")
 
-                                # Load the image and send it to the model
-                                # Process the image using our helper method
-                                img_url, error = self._process_image_to_base64(view_path)
+                            # If this is a view (has coordinates in the path), extract them
+                            if "__" in image_path:
+                                try:
+                                    # Parse the coordinates from the path
+                                    parts = Path(image_path).stem.split("__")
+                                    if len(parts) >= 3:
+                                        coords_str = parts[2]
+                                        coords = tuple(map(int, coords_str.split("_")))
+                                        if len(coords) == 4:
+                                            # These are the coordinates to blackout
+                                            self.current_view_coordinates = coords
+                                            self.dialog.current_view_coordinates = coords
+                                except Exception as e:
+                                    print(f"Error parsing coordinates from path: {str(e)}")
 
-                                if img_url:
-                                    # Log a message without the full base64 string
-                                    print("Created image URL for blacked out view (base64 data omitted)")
+                            # After blackout, we should reset the view coordinates
+                            # since we're now looking at the full image again
+                            self.current_view_coordinates = None
+                            self.dialog.current_view_coordinates = None
 
-                                    # Get the simplified list of images for the VLM
-                                    image_list = self.get_image_list(simplified=True)
+                            # Get the simplified list of images for the VLM
+                            image_list = self.get_image_list(simplified=True)
 
-                                    # Create a new user prompt with the image
-                                    prompt = TextPrompt(text="I've blacked out this region. Here's the updated image, cropped to focus on the remaining non-black areas.")
-                                    prompt.image_url = img_url
-                                    # Add the image to the dialog
-                                    self.dialog._message_lists.append([prompt])
-                                    # Set the last_image on the dialog for use in get_messages_for_llm_client
-                                    self.dialog.last_image = img_url
-                                else:
-                                    print(f"Error processing blacked out image: {error}")
+                            # Create a new user prompt with the updated image
+                            prompt = TextPrompt(text="I've blacked out this region. Here's the updated image, cropped to focus on the remaining non-black areas.")
+                            # Add the prompt to the dialog
+                            self.dialog._message_lists.append([prompt])
 
                             # Clean the tool result for the VLM
                             cleaned_result = clean_tool_result(tool_call.tool_name, tool_result, self.workspace_manager.root)
@@ -469,11 +506,10 @@ try breaking down the task into smaller steps and call this tool multiple times.
                             self.dialog.add_tool_call_result(tool_call, cleaned_result)
 
                             # Log the tool result with the image if available
-                            if self.run_logger:
-                                if self.last_image_path:
-                                    self.run_logger.log_tool_result(tool_result, image_path=self.last_image_path)
-                                else:
-                                    self.run_logger.log_tool_result(tool_result)
+                            if self.run_logger and self.original_image_path:
+                                self.run_logger.log_tool_result(tool_result, image_path=self.original_image_path)
+                            else:
+                                self.run_logger.log_tool_result(tool_result)
 
                         # For all other tools
                         else:
@@ -620,9 +656,11 @@ try breaking down the task into smaller steps and call this tool multiple times.
         else:
             self.dialog.clear()
             self.interrupted = False
-            self.last_image_path = None
-            self.dialog.last_image = None
-            self.processed_images.clear()
+            self.original_image_path = None
+            self.current_view_coordinates = None
+            self.dialog.original_image = None
+            self.dialog.original_image_path = None
+            self.dialog.current_view_coordinates = None
 
         # If an initial image is provided, include it with the first message
         if initial_image_path is not None and not resume:
@@ -647,11 +685,14 @@ try breaking down the task into smaller steps and call this tool multiple times.
                 self.dialog.add_user_prompt("")
                 self.dialog._message_lists[-1] = [prompt]
 
-                # Store the image path and URL
-                self.last_image_path = initial_image_path
-                self.processed_images.add(str(initial_image_path))
-                # Set the last_image on the dialog for use in get_messages_for_llm_client
-                self.dialog.last_image = img_url
+                # Store the original image path and URL
+                self.original_image_path = initial_image_path
+                # Set the original_image on the dialog for use in get_messages_for_llm_client
+                self.dialog.original_image = img_url
+                self.dialog.original_image_path = initial_image_path
+                # Initialize with no view coordinates (showing the full image)
+                self.current_view_coordinates = None
+                self.dialog.current_view_coordinates = None
 
                 # Log the user message with the image
                 self.run_logger.log_user_message(instruction, image_path=initial_image_path)
@@ -944,11 +985,12 @@ try breaking down the task into smaller steps and call this tool multiple times.
 
         return tool_calls
 
-    def _process_image_to_base64(self, image_path):
+    def _process_image_to_base64(self, image_path, view_coordinates=None):
         """Process an image and convert it to base64 for display.
 
         Args:
             image_path: Path to the image file
+            view_coordinates: Optional coordinates to crop the image [x1, y1, x2, y2]
 
         Returns:
             Tuple of (image_url, error_message)
@@ -964,6 +1006,12 @@ try breaking down the task into smaller steps and call this tool multiple times.
 
             # Load the image
             img = Image.open(image_path)
+
+            # If view coordinates are provided, crop the image
+            if view_coordinates:
+                x1, y1, x2, y2 = view_coordinates
+                # Coordinates are already in pixels
+                img = img.crop((x1, y1, x2, y2))
 
             # Crop to remove black regions
             img = crop_to_remove_black_regions(img)
@@ -989,6 +1037,8 @@ try breaking down the task into smaller steps and call this tool multiple times.
     def clear(self):
         self.dialog.clear()
         self.interrupted = False
-        self.last_image_path = None
-        self.dialog.last_image = None
-        self.processed_images.clear()
+        self.original_image_path = None
+        self.current_view_coordinates = None
+        self.dialog.original_image = None
+        self.dialog.original_image_path = None
+        self.dialog.current_view_coordinates = None

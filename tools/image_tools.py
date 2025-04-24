@@ -18,11 +18,11 @@ from utils.common import (
     ToolImplOutput,
 )
 from utils.workspace_manager import WorkspaceManager
-from utils.image_manager import ImageManager
+from utils.image_manager import ImageManager, ImageView
 from utils.image_utils import (
     get_image_size,
 )
-from PIL import Image
+from PIL import Image, ImageDraw
 
 
 class CropTool(LLMTool):
@@ -130,63 +130,44 @@ Example: To crop the top-left quarter of the image, use bbox=[0, 0, 500, 500]
                     tool_result_message=f"Error: Image not found at {image_path}",
                 )
 
-            # Get the dimensions of the CURRENT VIEW being displayed, not the original image
-            if hasattr(CropTool, "current_view_size") and CropTool.current_view_size is not None:
-                img_width, img_height = CropTool.current_view_size
-            else:
-                # If no current view is set, fall back to original image dimensions
-                from utils.image_utils import get_image_size
-                img_width, img_height = get_image_size(image_path)
-
-            # Convert normalized coordinates [0, 1000] to pixel coordinates
-            # These coordinates are now relative to the current view
-            pixel_x1 = int(x1 * img_width / 1000)
-            pixel_y1 = int(y1 * img_height / 1000)
-            pixel_x2 = int(x2 * img_width / 1000)
-            pixel_y2 = int(y2 * img_height / 1000)
-
-            # If this is a view (not original image), adjust coordinates relative to parent view
-            if hasattr(CropTool, "current_view_coords") and CropTool.current_view_coords is not None:
-                parent_x1, parent_y1, _, _ = CropTool.current_view_coords
-                # Adjust coordinates relative to parent view's position
-                pixel_x1 += parent_x1
-                pixel_y1 += parent_y1
-                pixel_x2 += parent_x1
-                pixel_y2 += parent_y1
-
-            # Ensure coordinates are within image bounds
-            pixel_x1 = max(0, min(pixel_x1, img_width - 1))
-            pixel_y1 = max(0, min(pixel_y1, img_height - 1))
-            pixel_x2 = max(pixel_x1 + 1, min(pixel_x2, img_width))
-            pixel_y2 = max(pixel_y1 + 1, min(pixel_y2, img_height))
-
-            # Create the view with pixel coordinates
-            coordinates = (pixel_x1, pixel_y1, pixel_x2, pixel_y2)
-
             # Check if this is a view or an original image
-            is_view = image_path.parent == self.image_manager.views_dir
+            is_view = self.image_manager.is_view(image_path)
 
             if is_view:
                 # If it's a view, we need to find the original image and adjust coordinates
                 for orig_path, views in self.image_manager.image_views.items():
                     for v_id, v in views.items():
-                        if v.view_path == image_path:
+                        if v.view_path == image_path or v.view_path.name == image_path.name:
                             # Found the view
                             view_x1, view_y1, view_x2, view_y2 = v.coordinates
 
-                            # CRITICAL FIX: The coordinates are already relative to the current view
-                            # We need to adjust them to be relative to the original image
-                            # by adding the current view's coordinates
+                            # Get the original image dimensions
+                            img = Image.open(orig_path)
+                            img_width, img_height = img.size
+
+                            # Calculate the view's dimensions
+                            view_width = view_x2 - view_x1
+                            view_height = view_y2 - view_y1
+
+                            # Convert normalized coordinates [0, 1000] to pixel coordinates
+                            # relative to the view
+                            pixel_x1 = int(x1 * view_width / 1000)
+                            pixel_y1 = int(y1 * view_height / 1000)
+                            pixel_x2 = int(x2 * view_width / 1000)
+                            pixel_y2 = int(y2 * view_height / 1000)
+
+                            # Adjust coordinates to be relative to the original image
                             adjusted_coords = (
-                                view_x1 + pixel_x1,  # Add current view's x1 offset
-                                view_y1 + pixel_y1,  # Add current view's y1 offset
-                                view_x1 + pixel_x2,  # Add current view's x1 offset (not x2)
-                                view_y1 + pixel_y2,  # Add current view's y1 offset (not y2)
+                                view_x1 + pixel_x1,  # Add view's x1 offset
+                                view_y1 + pixel_y1,  # Add view's y1 offset
+                                view_x1 + pixel_x2,  # Add view's x1 offset
+                                view_y1 + pixel_y2,  # Add view's y1 offset
                             )
 
                             # Log the adjustment for debugging
-                            print(f"CropTool: Adjusting coordinates from {coordinates} to {adjusted_coords} relative to original image")
+                            print(f"CropTool: Adjusting coordinates from {bbox} to {adjusted_coords} relative to original image")
 
+                            # Create the view with the adjusted coordinates
                             view_path = self.image_manager.create_view(
                                 orig_path, view_id, adjusted_coords
                             )
@@ -200,19 +181,43 @@ Example: To crop the top-left quarter of the image, use bbox=[0, 0, 500, 500]
                         tool_result_message=f"Error: Could not find view information for {image_path}",
                     )
             else:
-                # It's an original image - no adjustment needed
+                # It's an original image
+                # Get the image dimensions
+                img = Image.open(image_path)
+                img_width, img_height = img.size
+
+                # Convert normalized coordinates [0, 1000] to pixel coordinates
+                pixel_x1 = int(x1 * img_width / 1000)
+                pixel_y1 = int(y1 * img_height / 1000)
+                pixel_x2 = int(x2 * img_width / 1000)
+                pixel_y2 = int(y2 * img_height / 1000)
+
+                # Ensure coordinates are within image bounds
+                pixel_x1 = max(0, min(pixel_x1, img_width - 1))
+                pixel_y1 = max(0, min(pixel_y1, img_height - 1))
+                pixel_x2 = max(pixel_x1 + 1, min(pixel_x2, img_width))
+                pixel_y2 = max(pixel_y1 + 1, min(pixel_y2, img_height))
+
+                # Create the view with pixel coordinates
+                coordinates = (pixel_x1, pixel_y1, pixel_x2, pixel_y2)
                 view_path = self.image_manager.create_view(image_path, view_id, coordinates)
 
             # Get information about the created view
             view_info = self.image_manager.get_view_info(view_path)
 
+            # Update the current view coordinates for future crops
+            CropTool.current_view_coords = view_info['coordinates']
+
+            # Update the current view size
+            CropTool.current_view_size = view_info['size']
+
             return ToolImplOutput(
-                tool_output=f"Created new view at {view_path}\n"
+                tool_output=f"Created new view with bounding box {bbox}\n"
                            f"View ID: {view_info['view_id']}\n"
                            f"Original image: {view_info['original_image']}\n"
                            f"Coordinates: {view_info['coordinates']}\n"
                            f"Size: {view_info['size'][0]}x{view_info['size'][1]}",
-                tool_result_message=f"Created new view at {view_path}",
+                tool_result_message=f"Created new view with coordinates {view_info['coordinates']}",
             )
 
         except Exception as e:
@@ -548,65 +553,118 @@ The smallest remaining view (with the least number of pixels) is identified for 
         """
         image_path = tool_input["image_path"]
 
-        # Ensure path is relative to workspace
-        if isinstance(image_path, str) and not image_path.startswith('/'):
-            image_path = str(self.image_manager.views_dir / image_path)
+        # Extract coordinates if provided
+        x1 = tool_input.get("x1")
+        y1 = tool_input.get("y1")
+        x2 = tool_input.get("x2")
+        y2 = tool_input.get("y2")
 
-        # Check if image exists
-        if not Path(image_path).exists():
-            return ToolImplOutput(
-                tool_output=f"Error blacking out image: Image not found: {image_path}",
-                tool_result_message="Failed to black out image - not found"
-            )
+        # If all coordinates are provided, use them
+        if all(coord is not None for coord in [x1, y1, x2, y2]):
+            coordinates = (x1, y1, x2, y2)
+        else:
+            coordinates = None
+
+        # Convert to Path object if it's a string
+        path_obj = Path(image_path) if isinstance(image_path, str) else image_path
+
+        # Check if this is a virtual path (for a view)
+        is_view = "__" in str(path_obj)
 
         try:
-            # Register the view if it's not already registered
-            if isinstance(image_path, str) and image_path.endswith('.png'):
-                view_name = Path(image_path).name
-                original_image = view_name.split('__')[0] + '.png'
-                original_path = str(self.image_manager.images_dir / original_image)
+            if is_view:
+                # This is a view path, find the view in our registry
+                view_obj = None
+                original_image_path = None
 
-                # Parse coordinates from view name
-                coords_str = view_name.split('__')[-1].replace('.png', '')
-                coords = [int(x) for x in coords_str.split('_')]
+                # Try to find by path or name
+                for img_path, views in self.image_manager.image_views.items():
+                    for v_id, v in views.items():
+                        if str(v.view_path) == str(path_obj) or v.view_path.name == path_obj.name:
+                            view_obj = v
+                            original_image_path = img_path
+                            break
+                    if view_obj:
+                        break
 
-                # Register view if not already registered
-                if not self.image_manager.is_view_registered(image_path):
-                    self.image_manager.register_view(
-                        original_path,
-                        image_path,
-                        coords
+                # If not found, try to parse the coordinates from the path
+                if not view_obj and "__" in str(path_obj):
+                    try:
+                        # Parse the view path to get the original image and coordinates
+                        parts = path_obj.stem.split("__")
+                        if len(parts) >= 3:
+                            original_name = parts[0]
+                            view_id = parts[1]
+                            coords_str = parts[2]
+
+                            # Find the original image
+                            for img_path in self.image_manager.list_images():
+                                if img_path.stem == original_name:
+                                    original_image_path = img_path
+                                    break
+
+                            # Parse coordinates
+                            coords = tuple(map(int, coords_str.split("_")))
+                            if len(coords) == 4 and original_image_path:
+                                # Create a temporary view object
+                                view_obj = ImageView(
+                                    view_id=view_id,
+                                    original_image_path=original_image_path,
+                                    coordinates=coords
+                                )
+                    except Exception as e:
+                        print(f"Error parsing view path: {e}")
+
+                if not view_obj or not original_image_path:
+                    return ToolImplOutput(
+                        tool_output=f"Error: Could not find view for {path_obj}",
+                        tool_result_message="Failed to black out view - not found"
                     )
 
-            # Proceed with blackout
-            # Convert to Path object if it's a string
-            path_obj = Path(image_path) if isinstance(image_path, str) else image_path
-            if self.image_manager.is_view(path_obj):
-                updated_paths = self.image_manager.blackout_view(path_obj)
+                # Use the view's coordinates if no specific coordinates were provided
+                if coordinates is None:
+                    coordinates = view_obj.coordinates
+
+                # Blackout the region in the original image
+                updated_paths = self.image_manager.blackout_view(view_obj.view_path)
+
                 return ToolImplOutput(
-                    tool_output=f"Blacked out view at {path_obj}\n"
-                               f"Updated {len(updated_paths)} images/views",
-                    tool_result_message=f"Blacked out view at {path_obj}"
+                    tool_output=f"Blacked out region at coordinates {coordinates} in the original image",
+                    tool_result_message=f"Blacked out region at coordinates {coordinates}"
                 )
             else:
-                # Handle original image blackout
-                img = Image.open(path_obj)
-                black_img = Image.new('RGB', img.size, (0, 0, 0))
-                black_img.save(path_obj)
+                # This is an original image
+                if not path_obj.exists():
+                    return ToolImplOutput(
+                        tool_output=f"Error: Image not found at {path_obj}",
+                        tool_result_message="Failed to black out image - not found"
+                    )
 
-                # Update all related views
-                for view_id, view in self.image_manager.image_views.get(str(path_obj), {}).items():
-                    black_view = Image.new('RGB', (
-                        view.coordinates[2] - view.coordinates[0],
-                        view.coordinates[3] - view.coordinates[1]
-                    ), (0, 0, 0))
-                    black_view.save(view.view_path)
+                # If no coordinates provided, blackout the entire image
+                if coordinates is None:
+                    img = Image.open(path_obj)
+                    black_img = Image.new('RGB', img.size, (0, 0, 0))
+                    black_img.save(path_obj)
 
-                return ToolImplOutput(
-                    tool_output=f"Blacked out image at {path_obj}",
-                    tool_result_message=f"Blacked out image at {path_obj}"
-                )
+                    # Clear all views for this image
+                    if str(path_obj) in self.image_manager.image_views:
+                        self.image_manager.image_views[str(path_obj)] = {}
 
+                    return ToolImplOutput(
+                        tool_output=f"Blacked out entire image at {path_obj}",
+                        tool_result_message=f"Blacked out entire image at {path_obj}"
+                    )
+                else:
+                    # Blackout just the specified region
+                    img = Image.open(path_obj)
+                    draw = ImageDraw.Draw(img)
+                    draw.rectangle(coordinates, fill=(0, 0, 0))
+                    img.save(path_obj)
+
+                    return ToolImplOutput(
+                        tool_output=f"Blacked out region at coordinates {coordinates} in image {path_obj}",
+                        tool_result_message=f"Blacked out region at coordinates {coordinates}"
+                    )
         except Exception as e:
             return ToolImplOutput(
                 tool_output=f"Error blacking out image: {str(e)}",

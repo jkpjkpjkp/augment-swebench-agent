@@ -39,8 +39,3 @@ Stored initial question:
 
 (Current token count: 459)
 
-Checking for tool calls in text: Okay, I'm ready to analyze the image. However, you haven't provided a question yet. Please tell me what you'd like to know about the image, and I'll start the analysis....
-No tool_code blocks found, trying with regular code blocks
-Found 0 code blocks
-[no tools were called, defaulting to blackout tool]
-Agent result: Error blacking out image: not enough values to unpack (expected 4, got 2)

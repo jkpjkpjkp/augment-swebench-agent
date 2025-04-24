@@ -1,14 +1,16 @@
 """Image management utilities for VQA tasks.
 
 This module provides functionality for managing images and their views (crops)
-in the workspace. It ensures that changes to one view are reflected in all other
-views and the original image.
+in the workspace. Instead of creating physical files for each view, we now
+store only the coordinates of the view in the original image.
 """
 
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Union
 import numpy as np
 from PIL import Image
+import base64
+from io import BytesIO
 
 class ImageView:
     """Represents a view (crop) of an original image."""
@@ -18,7 +20,6 @@ class ImageView:
         view_id: str,
         original_image_path: Path,
         coordinates: Tuple[int, int, int, int],  # (x1, y1, x2, y2)
-        view_path: Path
     ):
         """Initialize an image view.
 
@@ -26,16 +27,59 @@ class ImageView:
             view_id: Unique identifier for this view
             original_image_path: Path to the original image
             coordinates: Crop coordinates (x1, y1, x2, y2)
-            view_path: Path where this view is saved
         """
         self.view_id = view_id
         self.original_image_path = original_image_path
         self.coordinates = coordinates
-        self.view_path = view_path
+        # Generate a virtual path for compatibility with existing code
+        self.view_path = self._generate_virtual_path()
+
+    def _generate_virtual_path(self) -> Path:
+        """Generate a virtual path for this view.
+
+        This is used for compatibility with existing code that expects a view_path.
+        The path is not an actual file on disk, but a virtual path that uniquely
+        identifies this view.
+
+        Returns:
+            A virtual path for this view
+        """
+        x1, y1, x2, y2 = self.coordinates
+        original_name = self.original_image_path.stem
+        coords_str = f"{x1}_{y1}_{x2}_{y2}"
+        view_filename = f"{original_name}__{self.view_id}__{coords_str}{self.original_image_path.suffix}"
+        # Use the views directory from the original image path
+        views_dir = self.original_image_path.parent.parent / "views"
+        return views_dir / view_filename
 
     def get_region(self) -> Tuple[int, int, int, int]:
         """Get the region coordinates of this view in the original image."""
         return self.coordinates
+
+    def get_cropped_image(self) -> Image.Image:
+        """Get the cropped image for this view.
+
+        Returns:
+            The cropped image
+        """
+        # Load the original image
+        img = Image.open(self.original_image_path)
+        # Crop to the view coordinates
+        return img.crop(self.coordinates)
+
+    def get_base64_url(self) -> str:
+        """Get the base64 URL for this view.
+
+        Returns:
+            Base64 URL for the view
+        """
+        # Get the cropped image
+        img = self.get_cropped_image()
+        # Convert to base64
+        buffered = BytesIO()
+        img.save(buffered, format="PNG")
+        img_base64 = base64.b64encode(buffered.getvalue()).decode("utf-8")
+        return f"data:image/png;base64,{img_base64}"
 
 
 class ImageManager:
@@ -63,7 +107,10 @@ class ImageManager:
         self._load_existing_images()
 
     def _load_existing_images(self):
-        """Load existing images and views from the workspace."""
+        """Load existing images from the workspace.
+
+        Note: We no longer load views from disk since they are now stored as coordinates only.
+        """
         # Clear existing registry
         self.image_views = {}
 
@@ -72,33 +119,6 @@ class ImageManager:
             if img_path.is_file() and img_path.suffix.lower() in ['.jpg', '.jpeg', '.png']:
                 print(f"Registering image: {img_path}")
                 self.image_views[img_path] = {}
-
-        # Load views
-        for view_path in self.views_dir.glob("*"):
-            if view_path.is_file() and view_path.suffix.lower() in ['.jpg', '.jpeg', '.png']:
-                # Parse view metadata from filename
-                # Format: original_image_name__viewid__x1_y1_x2_y2.ext
-                try:
-                    parts = view_path.stem.split('__')
-                    if len(parts) >= 3:
-                        original_name = parts[0]
-                        view_id = parts[1]
-                        coords_str = parts[2]
-
-                        # Parse coordinates
-                        coords = tuple(map(int, coords_str.split('_')))
-                        if len(coords) == 4:
-                            original_path = self.images_dir / f"{original_name}{view_path.suffix}"
-                            if original_path in self.image_views:
-                                view = ImageView(
-                                    view_id=view_id,
-                                    original_image_path=original_path,
-                                    coordinates=coords,
-                                    view_path=view_path
-                                )
-                                self.image_views[original_path][view_id] = view
-                except Exception as e:
-                    print(f"Error loading view {view_path}: {e}")
 
     def add_image(self, image_path: Path, image_name: Optional[str] = None) -> Path:
         """Add a new image to the workspace.
@@ -147,7 +167,7 @@ class ImageManager:
             coordinates: Crop coordinates (x1, y1, x2, y2)
 
         Returns:
-            Path to the created view
+            Path to the virtual view (not an actual file)
         """
         # Resolve image path
         if not image_path.is_absolute():
@@ -199,28 +219,18 @@ class ImageManager:
         if x1 < 0 or y1 < 0 or x2 > width or y2 > height or x1 >= x2 or y1 >= y2:
             raise ValueError(f"Invalid coordinates {coordinates} for image of size {width}x{height}")
 
-        # Create the view
-        view = img.crop(coordinates)
-
-        # Generate view filename: original_name__viewid__x1_y1_x2_y2.ext
-        original_name = image_path.stem
-        coords_str = f"{x1}_{y1}_{x2}_{y2}"
-        view_filename = f"{original_name}__{view_id}__{coords_str}{image_path.suffix}"
-        view_path = self.views_dir / view_filename
-
-        # Save the view
-        view.save(view_path)
-
-        # Register the view
+        # Create the view object (no physical file is created)
         view_obj = ImageView(
             view_id=view_id,
             original_image_path=image_path,
-            coordinates=coordinates,
-            view_path=view_path
+            coordinates=coordinates
         )
+
+        # Register the view
         self.image_views[image_path][view_id] = view_obj
 
-        return view_path
+        # Return the virtual path
+        return view_obj.view_path
 
     def update_view(
         self,
@@ -391,75 +401,56 @@ class ImageManager:
         Returns:
             List of paths to all updated images (original + views)
         """
-        # Normalize the path
-        if not view_path.is_absolute():
-            view_path = self.views_dir / view_path.name
-
-        # Check if the file exists
-        if not view_path.exists():
-            # Try to find the view by name
-            for img_path, views in self.image_views.items():
-                for v_id, v in views.items():
-                    if v.view_path.name == view_path.name:
-                        view_path = v.view_path
-                        break
-                if view_path.exists():
-                    break
-
-            # If still not found, try to find by view ID
-            if not view_path.exists():
-                view_id = str(view_path)
-                for img_path, views in self.image_views.items():
-                    if view_id in views:
-                        view_path = views[view_id].view_path
-                        break
-
-        if not view_path.exists():
-            raise ValueError(f"View not found: {view_path}")
-
-        # Find the original image for this view
+        # Find the view in our registry
+        view_obj = None
         original_image_path = None
         view_id_to_delete = None
+
+        # Try to find by path or name
         for img_path, views in self.image_views.items():
             for v_id, v in views.items():
-                if v.view_path == view_path:
+                if v.view_path == view_path or v.view_path.name == view_path.name:
+                    view_obj = v
                     original_image_path = img_path
                     view_id_to_delete = v_id
                     break
-            if original_image_path:
+            if view_obj:
                 break
 
-        # Load the view
-        view_img = Image.open(view_path)
+        # If still not found, try to find by view ID
+        if not view_obj:
+            view_id = str(view_path)
+            for img_path, views in self.image_views.items():
+                if view_id in views:
+                    view_obj = views[view_id]
+                    original_image_path = img_path
+                    view_id_to_delete = view_id
+                    break
 
-        # Create a black image of the same size
-        black_img = Image.new('RGB', view_img.size, (0, 0, 0))
+        if not view_obj or not original_image_path:
+            raise ValueError(f"View not found: {view_path}")
 
-        # Update the view with the black image
-        updated_paths = self.update_view(view_path, black_img)
+        # Get the coordinates of the view
+        x1, y1, x2, y2 = view_obj.coordinates
 
-        # If we found the original image, delete the blacked out view and find the smallest view
-        if original_image_path and view_id_to_delete:
-            # Delete the view we just blacked out
-            if view_id_to_delete in self.image_views[original_image_path]:
-                view_to_delete = self.image_views[original_image_path][view_id_to_delete].view_path
-                del self.image_views[original_image_path][view_id_to_delete]
-                view_to_delete.unlink(missing_ok=True)
-                print(f"Deleted blacked out view: {view_to_delete.name}")
+        # Load the original image
+        original_img = Image.open(original_image_path)
 
-            # Delete any other fully black views
-            deleted_views = self.delete_fully_black_views(original_image_path)
-            if deleted_views:
-                print(f"Deleted {len(deleted_views)} additional fully black views")
+        # Create a black rectangle in the original image at the view coordinates
+        from PIL import ImageDraw
+        draw = ImageDraw.Draw(original_img)
+        draw.rectangle((x1, y1, x2, y2), fill=(0, 0, 0))
 
-            # Find the smallest view
-            smallest_view = self.find_smallest_view(original_image_path)
-            if smallest_view:
-                print(f"Smallest remaining view: {smallest_view.name}")
-            else:
-                print("No remaining views after blackout")
+        # Save the modified original image
+        original_img.save(original_image_path)
 
-        return updated_paths
+        # Remove the view from our registry
+        if view_id_to_delete in self.image_views[original_image_path]:
+            del self.image_views[original_image_path][view_id_to_delete]
+            print(f"Removed blacked out view: {view_obj.view_path.name}")
+
+        # Return the path to the updated original image
+        return [original_image_path]
 
     def list_images(self) -> List[Path]:
         """List all original images in the workspace.
@@ -518,37 +509,43 @@ class ImageManager:
         """Get information about a view.
 
         Args:
-            view_path: Path to the view
+            view_path: Path to the view (virtual path)
 
         Returns:
             Dictionary with view information
         """
-        # Find the view by path
+        # Find the view by path or name
         for img_path, views in self.image_views.items():
             for v_id, v in views.items():
-                if v.view_path == view_path:
-                    with Image.open(view_path) as img:
-                        return {
-                            "view_id": v.view_id,
-                            "original_image": str(v.original_image_path),
-                            "coordinates": v.coordinates,
-                            "size": img.size,
-                            "path": str(view_path)
-                        }
+                if v.view_path == view_path or v.view_path.name == view_path.name:
+                    # Get the cropped image size
+                    x1, y1, x2, y2 = v.coordinates
+                    size = (x2 - x1, y2 - y1)
+
+                    return {
+                        "view_id": v.view_id,
+                        "original_image": str(v.original_image_path),
+                        "coordinates": v.coordinates,
+                        "size": size,
+                        "path": str(v.view_path)
+                    }
 
         # Try to find by view ID
         view_id = str(view_path)
         for img_path, views in self.image_views.items():
             if view_id in views:
                 v = views[view_id]
-                with Image.open(v.view_path) as img:
-                    return {
-                        "view_id": v.view_id,
-                        "original_image": str(v.original_image_path),
-                        "coordinates": v.coordinates,
-                        "size": img.size,
-                        "path": str(v.view_path)
-                    }
+                # Get the cropped image size
+                x1, y1, x2, y2 = v.coordinates
+                size = (x2 - x1, y2 - y1)
+
+                return {
+                    "view_id": v.view_id,
+                    "original_image": str(v.original_image_path),
+                    "coordinates": v.coordinates,
+                    "size": size,
+                    "path": str(v.view_path)
+                }
 
         raise ValueError(f"View not found: {view_path}")
 
@@ -575,35 +572,24 @@ class ImageManager:
                     return True
         return False
 
-    def register_view(self, original_path: str, view_path: str, coordinates: list) -> None:
+    def register_view(self, original_path: str, coordinates: list, view_id: Optional[str] = None) -> None:
         """Register a view with the image manager.
 
         Args:
             original_path: Path to the original image
-            view_path: Path to the view
             coordinates: Crop coordinates (x1, y1, x2, y2)
+            view_id: Optional identifier for the view
         """
-        # Convert paths to Path objects if they're not already
+        # Convert path to Path object if it's not already
         if not isinstance(original_path, Path):
             original_path = Path(original_path)
-        if not isinstance(view_path, Path):
-            view_path = Path(view_path)
 
         # Make sure the original path is absolute
         if not original_path.is_absolute():
             original_path = self.images_dir / original_path.name
 
-        # Make sure the view path is absolute
-        if not view_path.is_absolute():
-            view_path = self.views_dir / view_path.name
-
-        # Extract view ID from filename
-        view_name = view_path.name
-        parts = view_name.split('__')
-        if len(parts) >= 2:
-            view_id = parts[1]
-        else:
-            # Generate a view ID if not present in the filename
+        # Generate view ID if not provided
+        if view_id is None:
             view_id = f"view_{len(self.image_views.get(original_path, {})) + 1}"
 
         # Make sure coordinates is a tuple
@@ -614,8 +600,7 @@ class ImageManager:
         view_obj = ImageView(
             view_id=view_id,
             original_image_path=original_path,
-            coordinates=coordinates,
-            view_path=view_path
+            coordinates=coordinates
         )
 
         # Register the original image if not already registered
@@ -624,6 +609,8 @@ class ImageManager:
 
         # Register the view
         self.image_views[original_path][view_id] = view_obj
+
+        return view_obj.view_path
 
     def is_view(self, path: Path) -> bool:
         """Check if a path is a view (not an original image).

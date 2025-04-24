@@ -5,6 +5,7 @@ import logging
 import time
 from dataclasses import dataclass, field
 from typing import Any, Optional, cast
+from pathlib import Path
 import subprocess
 
 import jsonschema
@@ -71,6 +72,9 @@ class DialogMessages:
 
     This implementation only keeps information that the model explicitly marks
     as important to remember in curly braces {like this}.
+
+    For images, we store only the original question image, and all views are
+    represented as coordinates (bounding boxes) of this original image.
     """
 
     def __init__(
@@ -85,8 +89,12 @@ class DialogMessages:
         self.truncation_history_token_cts: list[int] = []
         # Store remembered information from curly braces
         self.remembered_info: list[str] = []
-        # Store the last image URL to be used with messages
-        self.last_image: Optional[str] = None
+        # Store the original question image URL
+        self.original_image: Optional[str] = None
+        # Store the original image path
+        self.original_image_path: Optional[Path] = None
+        # Store the current view coordinates [x1, y1, x2, y2]
+        self.current_view_coordinates: Optional[list[int]] = None
         # Store the initial VQA question (pr_description)
         self.initial_question: Optional[str] = None
 
@@ -192,7 +200,8 @@ class DialogMessages:
         1. Returns only the initial message (no conversation history)
         2. Constructs the message directly from prompts/instruction.py
         3. Adds any remembered information (from curly braces) to that message
-        4. Uses self.last_image as the only image with the message
+        4. Uses self.original_image as the only image with the message
+        5. If current_view_coordinates are set, crops the original image to those coordinates
         """
         from prompts.instruction import INSTRUCTION_PROMPT
 
@@ -211,9 +220,36 @@ class DialogMessages:
         # Create a new TextPrompt with the formatted instruction
         new_prompt = TextPrompt(text=formatted_prompt)
 
-        # Use the last_image as the only image with the message
-        if self.last_image:
-            new_prompt.image_url = self.last_image
+        # Use the original_image as the only image with the message
+        assert self.original_image
+        assert self.current_view_coordinates
+        assert self.original_image_path
+        try:
+            from PIL import Image
+            from io import BytesIO
+            import base64
+
+            # Load the original image
+            img = Image.open(self.original_image_path)
+
+            # Crop to the current view coordinates (already in pixels)
+            x1, y1, x2, y2 = self.current_view_coordinates
+
+            # Crop the image
+            cropped_img = img.crop((x1, y1, x2, y2))
+
+            # Convert to base64
+            buffered = BytesIO()
+            cropped_img.save(buffered, format="PNG")
+            img_base64 = base64.b64encode(buffered.getvalue()).decode("utf-8")
+            img_url = f"data:image/png;base64,{img_base64}"
+
+            # Use the cropped image URL
+            new_prompt.image_url = img_url
+        except Exception as e:
+            # If there's an error, fall back to the original image
+            self.logger_for_agent_logs.info(f"Error cropping image: {str(e)}")
+            new_prompt.image_url = self.original_image
 
         # Return a single message list with just this prompt
         return [[new_prompt]]
@@ -290,6 +326,10 @@ class DialogMessages:
         """Delete all messages and reset state."""
         self._message_lists = []
         self.initial_question = None
+        self.original_image = None
+        self.original_image_path = None
+        self.current_view_coordinates = None
+        self.remembered_info = []
 
     def is_user_turn(self):
         return len(self._message_lists) % 2 == 0
