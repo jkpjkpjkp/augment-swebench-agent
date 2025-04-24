@@ -2,7 +2,6 @@
 Run the blackout tool test after creating a blue test image.
 """
 
-import os
 import sys
 import unittest
 from pathlib import Path

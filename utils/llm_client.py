@@ -779,7 +779,7 @@ class GeminiDirectClient(LLMClient):
                     if retry == self.max_retries - 1:
                         raise ValueError("API call returned None response after all retries")
                     continue
-                print(f"API call successful, received response")
+                print("API call successful, received response")
                 break
             except Exception as e:
                 print(f"Error during API call: {str(e)}")

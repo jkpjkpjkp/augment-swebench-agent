@@ -5,9 +5,7 @@ Simple test script for VQA functionality.
 This script tests the core image management functionality without relying on external data.
 """
 
-import os
 from pathlib import Path
-import numpy as np
 from PIL import Image
 
 from utils.image_manager import ImageManager

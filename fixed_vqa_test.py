@@ -5,7 +5,6 @@ Simple test script for VQA functionality with fixed path handling.
 This script tests the core image management functionality without relying on external data.
 """
 
-import os
 import shutil
 from pathlib import Path
 from PIL import Image

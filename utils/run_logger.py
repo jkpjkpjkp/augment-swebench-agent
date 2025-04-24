@@ -12,9 +12,8 @@ import re
 import shutil
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, Optional, Union
 
-from PIL import Image
 from rich.console import Console
 
 class RunLogger:
@@ -218,7 +217,7 @@ class RunLogger:
                 # Check if there's an image in the user message
                 if "image_path" in turn:
                     relative_path = os.path.relpath(turn["image_path"], self.run_dir)
-                    turn_html += f'<div class="image-container">\n'
+                    turn_html += '<div class="image-container">\n'
                     turn_html += f'<img src="{relative_path}" alt="User provided image">\n'
                     turn_html += f'<div class="metadata">Image: {os.path.basename(turn["image_path"])}</div>\n'
                     turn_html += '</div>\n'
@@ -254,7 +253,7 @@ class RunLogger:
                         # Check if there's an image in the tool result
                         if "image_path" in tool_call:
                             relative_path = os.path.relpath(tool_call["image_path"], self.run_dir)
-                            turn_html += f'<div class="image-container">\n'
+                            turn_html += '<div class="image-container">\n'
                             turn_html += f'<img src="{relative_path}" alt="Tool result image">\n'
                             turn_html += f'<div class="metadata">Image: {os.path.basename(tool_call["image_path"])}</div>\n'
                             turn_html += '</div>\n'
@@ -381,7 +380,7 @@ class RunLogger:
         # Log to file
         self.logger.info(f"User message (Turn {self.turn_counter}): {message[:100]}...")
         if image_path or image_base64:
-            self.logger.info(f"User message includes an image")
+            self.logger.info("User message includes an image")
 
     def log_model_response(self, response: str):
         """Log a model response.
@@ -488,7 +487,7 @@ class RunLogger:
         # Log to file
         self.logger.info(f"Tool result (Turn {current_turn['turn_id']}): {tool_result[:100]}...")
         if image_path or image_base64:
-            self.logger.info(f"Tool result includes an image")
+            self.logger.info("Tool result includes an image")
 
     def _make_json_serializable(self, obj):
         """Convert an object to a JSON serializable format.
@@ -729,7 +728,7 @@ class RunLogger:
             html_content += "<h2>Images</h2>\n"
             for img_path in call_data["images"]:
                 relative_path = os.path.relpath(img_path, call_dir)
-                html_content += f'<div class="image-container">\n'
+                html_content += '<div class="image-container">\n'
                 html_content += f'<img src="{relative_path}" alt="Image sent to model">\n'
                 html_content += f'<div class="metadata">Image: {os.path.basename(img_path)}</div>\n'
                 html_content += '</div>\n'
@@ -767,7 +766,7 @@ class RunLogger:
                         html_content += '</div>\n'
                     elif message_type == "tool_result":
                         html_content += '<div class="response">\n'
-                        html_content += f"<h4>Tool Result</h4>\n"
+                        html_content += "<h4>Tool Result</h4>\n"
                         text = message.get("tool_output", "").replace("\n", "<br>")
                         html_content += f"<p>{text}</p>\n"
                         html_content += '</div>\n'

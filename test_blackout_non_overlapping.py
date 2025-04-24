@@ -1,7 +1,5 @@
-import os
 from pathlib import Path
 from PIL import Image
-import numpy as np
 
 from utils.workspace_manager import WorkspaceManager
 from utils.image_manager import ImageManager
@@ -31,22 +29,22 @@ def test_blackout_non_overlapping():
     view1_id = "view1"
     view1_coords = (0, 0, 50, 50)  # Top-left
     print(f"Creating view1 with coordinates: {view1_coords}")
-    view1_path = image_manager.create_view(test_image_path, view1_id, view1_coords)
+    image_manager.create_view(test_image_path, view1_id, view1_coords)
     
     view2_id = "view2"
     view2_coords = (150, 0, 200, 50)  # Top-right
     print(f"Creating view2 with coordinates: {view2_coords}")
-    view2_path = image_manager.create_view(test_image_path, view2_id, view2_coords)
+    image_manager.create_view(test_image_path, view2_id, view2_coords)
     
     view3_id = "view3"
     view3_coords = (0, 150, 50, 200)  # Bottom-left
     print(f"Creating view3 with coordinates: {view3_coords}")
-    view3_path = image_manager.create_view(test_image_path, view3_id, view3_coords)
+    image_manager.create_view(test_image_path, view3_id, view3_coords)
     
     view4_id = "view4"
     view4_coords = (150, 150, 200, 200)  # Bottom-right
     print(f"Creating view4 with coordinates: {view4_coords}")
-    view4_path = image_manager.create_view(test_image_path, view4_id, view4_coords)
+    image_manager.create_view(test_image_path, view4_id, view4_coords)
     
     # Initialize the blackout tool
     blackout_tool = BlackoutTool(workspace_manager)

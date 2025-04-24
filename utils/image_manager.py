@@ -527,27 +527,27 @@ class ImageManager:
         for img_path, views in self.image_views.items():
             for v_id, v in views.items():
                 if v.view_path == view_path:
-                    img = Image.open(view_path)
-                    return {
-                        "view_id": v.view_id,
-                        "original_image": str(v.original_image_path),
-                        "coordinates": v.coordinates,
-                        "size": img.size,
-                        "path": str(view_path)
-                    }
+                    with Image.open(view_path) as img:
+                        return {
+                            "view_id": v.view_id,
+                            "original_image": str(v.original_image_path),
+                            "coordinates": v.coordinates,
+                            "size": img.size,
+                            "path": str(view_path)
+                        }
 
         # Try to find by view ID
         view_id = str(view_path)
         for img_path, views in self.image_views.items():
             if view_id in views:
                 v = views[view_id]
-                img = Image.open(v.view_path)
-                return {
-                    "view_id": v.view_id,
-                    "original_image": str(v.original_image_path),
-                    "coordinates": v.coordinates,
-                    "size": img.size,
-                    "path": str(v.view_path)
-                }
+                with Image.open(v.view_path) as img:
+                    return {
+                        "view_id": v.view_id,
+                        "original_image": str(v.original_image_path),
+                        "coordinates": v.coordinates,
+                        "size": img.size,
+                        "path": str(v.view_path)
+                    }
 
         raise ValueError(f"View not found: {view_path}")

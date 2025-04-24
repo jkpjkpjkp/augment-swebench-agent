@@ -7,12 +7,10 @@ This module provides tools for working with images in VQA tasks:
 """
 
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Union
-import os
+from typing import Any, Dict, Optional
 import base64
 from io import BytesIO
 
-from utils.llm_client import TextPrompt
 
 from utils.common import (
     DialogMessages,
@@ -24,12 +22,9 @@ from utils.image_manager import ImageManager
 from utils.image_utils import (
     load_image,
     save_image,
-    crop_image,
-    blackout_region,
-    highlight_region,
     get_image_size,
 )
-from PIL import Image, ImageDraw
+from PIL import Image
 
 
 class CropTool(LLMTool):
@@ -78,6 +73,14 @@ Example: To crop the top-left quarter of the image, use bbox=[0, 0, 500, 500]
         self.workspace_manager = workspace_manager
         self.image_manager = ImageManager(workspace_manager.root)
 
+        # Initialize class attributes if they don't exist
+        if not hasattr(CropTool, "last_selected_image"):
+            CropTool.last_selected_image = None
+        if not hasattr(CropTool, "current_view_size"):
+            CropTool.current_view_size = None
+        if not hasattr(CropTool, "current_view_coords"):
+            CropTool.current_view_coords = None
+
     def run_impl(
         self,
         tool_input: Dict[str, Any],
@@ -105,7 +108,7 @@ Example: To crop the top-left quarter of the image, use bbox=[0, 0, 500, 500]
         view_id = tool_input.get("view_id")
 
         # Use the last selected image (currently displayed image)
-        if not hasattr(self, "last_selected_image") or self.last_selected_image is None:
+        if not hasattr(CropTool, "last_selected_image") or CropTool.last_selected_image is None:
             # Try to find the last selected image from the image manager
             images = self.image_manager.list_images()
             if not images:
@@ -116,7 +119,7 @@ Example: To crop the top-left quarter of the image, use bbox=[0, 0, 500, 500]
             # Use the first image as a fallback
             image_path = images[0]
         else:
-            image_path = self.last_selected_image
+            image_path = CropTool.last_selected_image
 
         # Debug output
         print(f"CropTool: Using image: {image_path}, Bbox: {bbox}")
@@ -130,8 +133,8 @@ Example: To crop the top-left quarter of the image, use bbox=[0, 0, 500, 500]
                 )
 
             # Get the dimensions of the CURRENT VIEW being displayed, not the original image
-            if hasattr(self, "current_view_size"):
-                img_width, img_height = self.current_view_size
+            if hasattr(CropTool, "current_view_size") and CropTool.current_view_size is not None:
+                img_width, img_height = CropTool.current_view_size
             else:
                 # If no current view is set, fall back to original image dimensions
                 from utils.image_utils import get_image_size
@@ -145,8 +148,8 @@ Example: To crop the top-left quarter of the image, use bbox=[0, 0, 500, 500]
             pixel_y2 = int(y2 * img_height / 1000)
 
             # If this is a view (not original image), adjust coordinates relative to parent view
-            if hasattr(self, "current_view_coords"):
-                parent_x1, parent_y1, _, _ = self.current_view_coords
+            if hasattr(CropTool, "current_view_coords") and CropTool.current_view_coords is not None:
+                parent_x1, parent_y1, _, _ = CropTool.current_view_coords
                 # Adjust coordinates relative to parent view's position
                 pixel_x1 += parent_x1
                 pixel_y1 += parent_y1
@@ -391,7 +394,7 @@ After switching to an image, you can create views (crops) of specific regions us
                 img_base64 = base64.b64encode(buffered.getvalue()).decode("utf-8")
                 img_url = f"data:image/png;base64,{img_base64}"
                 # Log a sanitized version without the base64 data
-                print(f"Created image URL for selected image (base64 data omitted)")
+                print("Created image URL for selected image (base64 data omitted)")
 
                 # Add the image to the dialog
                 # Note: We're not adding the image to the dialog messages directly
@@ -400,7 +403,7 @@ After switching to an image, you can create views (crops) of specific regions us
                 # and let the agent handle it
 
                 # Create a message about the image
-                image_message = f"Switched to image at {image_path}\nSize: {size[0]}x{size[1]}\nImage URL: {img_url}"
+                f"Switched to image at {image_path}\nSize: {size[0]}x{size[1]}\nImage URL: {img_url}"
 
                 # Store the image URL in a separate variable for the agent to use
                 # but don't include it in the tool output to avoid logging it
@@ -408,6 +411,21 @@ After switching to an image, you can create views (crops) of specific regions us
                 # Store the selected image path for use by other tools
                 CropTool.last_selected_image = image_path
                 BlackoutTool.last_selected_image = image_path
+
+                # Set the current view size for the CropTool
+                CropTool.current_view_size = size
+
+                # If this is a view, set the current view coordinates
+                if is_view:
+                    try:
+                        view_info = self.image_manager.get_view_info(image_path)
+                        CropTool.current_view_coords = view_info['coordinates']
+                    except Exception as e:
+                        print(f"Warning: Could not set current view coordinates: {e}")
+                else:
+                    # If this is an original image, reset the current view coordinates
+                    if hasattr(CropTool, "current_view_coords"):
+                        delattr(CropTool, "current_view_coords")
 
                 # Get the list of all available images for display
                 all_images = self.image_manager.list_images()
@@ -531,11 +549,11 @@ The smallest remaining view (with the least number of pixels) is identified for 
             ToolImplOutput containing the result of the operation
         """
         image_path = tool_input["image_path"]
-        
+
         # Ensure path is relative to workspace
         if not image_path.startswith('/'):
             image_path = str(self.workspace_manager.get_views_dir() / image_path)
-        
+
         # Check if image exists
         if not Path(image_path).exists():
             return ToolImplOutput(
@@ -549,11 +567,11 @@ The smallest remaining view (with the least number of pixels) is identified for 
                 view_name = Path(image_path).name
                 original_image = view_name.split('__')[0] + '.png'
                 original_path = str(self.workspace_manager.get_images_dir() / original_image)
-                
+
                 # Parse coordinates from view name
                 coords_str = view_name.split('__')[-1].replace('.png', '')
                 coords = [int(x) for x in coords_str.split('_')]
-                
+
                 # Register view if not already registered
                 if not self.image_manager.is_view_registered(image_path):
                     self.image_manager.register_view(
@@ -575,7 +593,7 @@ The smallest remaining view (with the least number of pixels) is identified for 
                 img = load_image(image_path)
                 black_img = Image.new('RGB', img.size, (0, 0, 0))
                 save_image(black_img, image_path)
-                
+
                 # Update all related views
                 for view_id, view in self.image_manager.image_views.get(image_path, {}).items():
                     black_view = Image.new('RGB', (
@@ -583,7 +601,7 @@ The smallest remaining view (with the least number of pixels) is identified for 
                         view.coordinates[3] - view.coordinates[1]
                     ), (0, 0, 0))
                     save_image(black_view, view.view_path)
-                
+
                 return ToolImplOutput(
                     tool_output=f"Blacked out image at {image_path}",
                     tool_result_message=f"Blacked out image at {image_path}"

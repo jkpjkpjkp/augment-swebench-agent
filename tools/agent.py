@@ -55,8 +55,10 @@ try breaking down the task into smaller steps and call this tool multiple times.
         Returns:
             The system prompt with messages prepended if any
         """
+        # Replace the literal curly braces example with double braces to escape them during formatting
+        system_prompt_template = SYSTEM_PROMPT.replace("{important detail to remember}", "{{important detail to remember}}")
 
-        return SYSTEM_PROMPT.format(
+        return system_prompt_template.format(
             workspace_root=self.workspace_manager.root,
         )
 
@@ -328,7 +330,7 @@ try breaking down the task into smaller steps and call this tool multiple times.
                                 image_list = self.get_image_list(simplified=True)
 
                                 # Create a new user prompt with the image
-                                prompt = TextPrompt(text=f"I'm analyzing this image.")
+                                prompt = TextPrompt(text="I'm analyzing this image.")
                                 prompt.image_url = image_url
                                 # Add the image to the dialog
                                 self.dialog._message_lists.append([prompt])
@@ -387,13 +389,13 @@ try breaking down the task into smaller steps and call this tool multiple times.
                                     img_base64 = base64.b64encode(buffered.getvalue()).decode("utf-8")
                                     img_url = f"data:image/png;base64,{img_base64}"
                                     # Log a message without the full base64 string
-                                    print(f"Created image URL for cropped view (base64 data omitted)")
+                                    print("Created image URL for cropped view (base64 data omitted)")
 
                                     # Get the simplified list of images for the VLM
                                     image_list = self.get_image_list(simplified=True)
 
                                     # Create a new user prompt with the image
-                                    prompt = TextPrompt(text=f"Here's the cropped view I requested. Let me analyze it.")
+                                    prompt = TextPrompt(text="Here's the cropped view I requested. Let me analyze it.")
                                     prompt.image_url = img_url
                                     # Add the image to the dialog
                                     self.dialog._message_lists.append([prompt])
@@ -445,13 +447,13 @@ try breaking down the task into smaller steps and call this tool multiple times.
                                     img_base64 = base64.b64encode(buffered.getvalue()).decode("utf-8")
                                     img_url = f"data:image/png;base64,{img_base64}"
                                     # Log a message without the full base64 string
-                                    print(f"Created image URL for blacked out view (base64 data omitted)")
+                                    print("Created image URL for blacked out view (base64 data omitted)")
 
                                     # Get the simplified list of images for the VLM
                                     image_list = self.get_image_list(simplified=True)
 
                                     # Create a new user prompt with the image
-                                    prompt = TextPrompt(text=f"I've blacked out this region. Here's the updated image, cropped to focus on the remaining non-black areas.")
+                                    prompt = TextPrompt(text="I've blacked out this region. Here's the updated image, cropped to focus on the remaining non-black areas.")
                                     prompt.image_url = img_url
                                     # Add the image to the dialog
                                     self.dialog._message_lists.append([prompt])
@@ -644,7 +646,7 @@ try breaking down the task into smaller steps and call this tool multiple times.
                 img_base64 = base64.b64encode(buffered.getvalue()).decode("utf-8")
                 img_url = f"data:image/png;base64,{img_base64}"
                 # Log a message without the full base64 string
-                print(f"Created image URL for initial image (base64 data omitted)")
+                print("Created image URL for initial image (base64 data omitted)")
 
                 # Get the simplified list of images for the VLM
                 image_list = self.get_image_list(simplified=True)
@@ -809,7 +811,7 @@ try breaking down the task into smaller steps and call this tool multiple times.
             return abs(num1 - num2) <= max(rel_tol * max(abs(num1), abs(num2)), abs_tol)
         except (ValueError, TypeError):
             # If conversion fails, fall back to string comparison
-            self.logger_for_agent_logs.info(f"Numeric comparison failed, falling back to string comparison")
+            self.logger_for_agent_logs.info("Numeric comparison failed, falling back to string comparison")
             if isinstance(answer1, str) and isinstance(answer2, str):
                 return answer1.strip() == answer2.strip()
             return str(answer1).strip() == str(answer2).strip()

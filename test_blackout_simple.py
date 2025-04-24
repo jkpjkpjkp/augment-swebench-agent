@@ -7,7 +7,6 @@ This test verifies that when a view is blacked out:
 3. Any overlapping regions in other views also become black
 """
 
-import os
 import shutil
 from pathlib import Path
 import unittest

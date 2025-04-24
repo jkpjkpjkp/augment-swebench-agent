@@ -2,7 +2,6 @@
 Set up the test environment and run the blackout tool test.
 """
 
-import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -27,7 +26,7 @@ def setup_test_environment():
     blue_image = Image.new('RGB', (800, 1000), (0, 0, 255))  # Blue image
     blue_image.save(test_image_path)
     
-    print(f"Created test environment:")
+    print("Created test environment:")
     print(f"- Workspace: {workspace_path}")
     print(f"- Images directory: {images_dir}")
     print(f"- Views directory: {views_dir}")

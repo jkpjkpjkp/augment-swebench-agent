@@ -1,6 +1,5 @@
 """Tool definitions and utilities."""
 
-import copy
 import json
 import logging
 import time
@@ -69,6 +68,9 @@ class DialogMessages:
 
     A user turn consists of one or more prompts and tool results.
     An assistant turn consists of a model answer and tool calls.
+
+    This implementation only keeps information that the model explicitly marks
+    as important to remember in curly braces {like this}.
     """
 
     def __init__(
@@ -83,6 +85,8 @@ class DialogMessages:
         self.truncation_history_token_cts: list[int] = []
         self.token_budget_to_trigger_truncation = 120_000
         self.truncate_all_but_N = 3
+        # Store remembered information from curly braces
+        self.remembered_info: list[str] = []
 
     def add_user_prompt(
         self, message: str, allow_append_to_tool_call_results: bool = False
@@ -130,9 +134,23 @@ class DialogMessages:
         )
 
     def add_model_response(self, response: list[AssistantContentBlock]):
-        """Add the result of a model call to the dialog."""
+        """Add the result of a model call to the dialog.
+
+        Also extracts any text in curly braces {like this} and stores it in remembered_info.
+        """
         self._assert_assistant_turn()
         self._message_lists.append(cast(list[GeneralContentBlock], response))
+
+        # Extract and store text in curly braces
+        for block in response:
+            if isinstance(block, TextResult):
+                # Find all text in curly braces using regex
+                import re
+                curly_brace_matches = re.findall(r'\{([^{}]*)\}', block.text)
+                for match in curly_brace_matches:
+                    if match.strip():  # Only add non-empty matches
+                        self.remembered_info.append(match.strip())
+                        self.logger_for_agent_logs.info(f"Remembered: {match.strip()}")
 
     def count_tokens(self) -> int:
         """Count the total number of tokens in the dialog."""
@@ -161,71 +179,75 @@ class DialogMessages:
         return total_tokens
 
     def run_truncation_strategy(self) -> None:
-        """Truncate all the tool results apart from the last N turns."""
+        """Truncate the dialog to reduce token count.
 
-        print(
-            colored(
-                f"Truncating all but the last {self.truncate_all_but_N} turns as we hit the token budget {self.token_budget_to_trigger_truncation}.",
-                "yellow",
-            )
-        )
-        self.logger_for_agent_logs.info(
-            f"Truncating all but the last {self.truncate_all_but_N} turns as we hit the token budget {self.token_budget_to_trigger_truncation}."
-        )
+        With the new memory approach, we don't need to truncate the dialog history
+        since we're only keeping the most recent messages and remembered information.
 
+        This method is kept for compatibility but doesn't do anything significant.
+        """
+        # We're already only keeping the most recent messages, so no need to truncate
+        # Just log that we're not doing anything
         old_token_ct = self.count_tokens()
-
-        new_message_lists: list[list[GeneralContentBlock]] = copy.deepcopy(
-            self._message_lists
-        )
-
-        for message_list in new_message_lists[: -self.truncate_all_but_N]:
-            for message in message_list:
-                if isinstance(message, ToolFormattedResult):
-                    message.tool_output = (
-                        "[Truncated...re-run tool if you need to see output again.]"
-                    )
-                elif isinstance(message, ToolCall):
-                    if message.tool_name == "sequential_thinking":
-                        message.tool_input["thought"] = (
-                            "[Truncated...re-run tool if you need to see input/output again.]"
-                        )
-                    elif message.tool_name == "str_replace_editor":
-                        if "file_text" in message.tool_input:
-                            message.tool_input["file_text"] = (
-                                "[Truncated...re-run tool if you need to see input/output again.]"
-                            )
-                        if "old_str" in message.tool_input:
-                            message.tool_input["old_str"] = (
-                                "[Truncated...re-run tool if you need to see input/output again.]"
-                            )
-                        if "new_str" in message.tool_input:
-                            message.tool_input["new_str"] = (
-                                "[Truncated...re-run tool if you need to see input/output again.]"
-                            )
-
-        self._message_lists = new_message_lists
-
-        new_token_ct = self.count_tokens()
         print(
             colored(
-                f" [dialog_messages] Token count after truncation: {new_token_ct}",
+                f" [dialog_messages] No truncation needed with memory-based approach. Current token count: {old_token_ct}",
                 "yellow",
             )
         )
 
-        self.truncation_history_token_cts.append(old_token_ct - new_token_ct)
+        # Log to the agent logs as well
+        self.logger_for_agent_logs.info(
+            f"No truncation needed with memory-based approach. Current token count: {old_token_ct}"
+        )
+
+        # Add a 0 to the truncation history to maintain compatibility
+        self.truncation_history_token_cts.append(0)
 
     def get_messages_for_llm_client(self) -> LLMMessages:
-        """Returns messages in the format the LM client expects."""
+        """Returns messages in the format the LM client expects.
 
-        if (
-            self.use_prompt_budgeting
-            and self.count_tokens() > self.token_budget_to_trigger_truncation
-        ):
-            self.run_truncation_strategy()
+        Instead of returning the full conversation history, this implementation:
+        1. Returns only the most recent user message
+        2. Prepends any remembered information (from curly braces) to that message
+        """
+        # If there are no messages, return an empty list
+        if not self._message_lists:
+            return []
 
-        return list(self._message_lists)
+        # Create a copy of the most recent user message
+        if self.is_user_turn() and len(self._message_lists) >= 2:
+            # We're in a user turn, so get the last user message and last assistant message
+            last_user_messages = self._message_lists[-2]
+            last_assistant_messages = self._message_lists[-1]
+            result = [last_user_messages, last_assistant_messages]
+        elif self.is_assistant_turn() and len(self._message_lists) >= 1:
+            # We're in an assistant turn, so get just the last user message
+            last_user_messages = self._message_lists[-1]
+            result = [last_user_messages]
+        else:
+            # Fallback: just return whatever we have
+            return list(self._message_lists)
+
+        # If we have remembered information, prepend it to the first user message
+        if self.remembered_info and result and result[0]:
+            # Find the first TextPrompt in the user messages
+            for i, message in enumerate(result[0]):
+                if isinstance(message, TextPrompt):
+                    # Create a new TextPrompt with the remembered information
+                    remembered_text = "Previously remembered information:\n"
+                    remembered_text += "\n".join([f"- {info}" for info in self.remembered_info])
+                    remembered_text += "\n\n" + message.text
+
+                    # Replace the original TextPrompt with our new one
+                    new_prompt = TextPrompt(text=remembered_text)
+                    if hasattr(message, 'image_url') and message.image_url:
+                        new_prompt.image_url = message.image_url
+
+                    result[0][i] = new_prompt
+                    break
+
+        return result
 
     def drop_final_assistant_turn(self):
         """Remove the final assistant turn.

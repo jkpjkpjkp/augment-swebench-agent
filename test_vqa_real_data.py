@@ -193,7 +193,9 @@ def main():
     )
 
     # Format the instruction using the template
-    instruction = INSTRUCTION_PROMPT.format(
+    # Replace the literal curly braces example with double braces to escape them during formatting
+    instruction_template = INSTRUCTION_PROMPT.replace("{important detail to remember}", "{{important detail to remember}}")
+    instruction = instruction_template.format(
         pr_description=task_data['question'],
     )
 
