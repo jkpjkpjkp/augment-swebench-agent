@@ -551,3 +551,109 @@ class ImageManager:
                     }
 
         raise ValueError(f"View not found: {view_path}")
+
+    def is_view_registered(self, view_path: Path) -> bool:
+        """Check if a view is registered in the image manager.
+
+        Args:
+            view_path: Path to the view to check
+
+        Returns:
+            True if the view is registered, False otherwise
+        """
+        # Normalize the path
+        if not isinstance(view_path, Path):
+            view_path = Path(view_path)
+
+        if not view_path.is_absolute():
+            view_path = self.views_dir / view_path.name
+
+        # Check if the view is registered
+        for img_path, views in self.image_views.items():
+            for v_id, v in views.items():
+                if v.view_path == view_path or v.view_path.name == view_path.name:
+                    return True
+        return False
+
+    def register_view(self, original_path: str, view_path: str, coordinates: list) -> None:
+        """Register a view with the image manager.
+
+        Args:
+            original_path: Path to the original image
+            view_path: Path to the view
+            coordinates: Crop coordinates (x1, y1, x2, y2)
+        """
+        # Convert paths to Path objects if they're not already
+        if not isinstance(original_path, Path):
+            original_path = Path(original_path)
+        if not isinstance(view_path, Path):
+            view_path = Path(view_path)
+
+        # Make sure the original path is absolute
+        if not original_path.is_absolute():
+            original_path = self.images_dir / original_path.name
+
+        # Make sure the view path is absolute
+        if not view_path.is_absolute():
+            view_path = self.views_dir / view_path.name
+
+        # Extract view ID from filename
+        view_name = view_path.name
+        parts = view_name.split('__')
+        if len(parts) >= 2:
+            view_id = parts[1]
+        else:
+            # Generate a view ID if not present in the filename
+            view_id = f"view_{len(self.image_views.get(original_path, {})) + 1}"
+
+        # Make sure coordinates is a tuple
+        if isinstance(coordinates, list):
+            coordinates = tuple(coordinates)
+
+        # Create the view object
+        view_obj = ImageView(
+            view_id=view_id,
+            original_image_path=original_path,
+            coordinates=coordinates,
+            view_path=view_path
+        )
+
+        # Register the original image if not already registered
+        if original_path not in self.image_views:
+            self.image_views[original_path] = {}
+
+        # Register the view
+        self.image_views[original_path][view_id] = view_obj
+
+    def is_view(self, path: Path) -> bool:
+        """Check if a path is a view (not an original image).
+
+        Args:
+            path: Path to check
+
+        Returns:
+            True if the path is a view, False otherwise
+        """
+        # Normalize the path
+        if not isinstance(path, Path):
+            path = Path(path)
+
+        if not path.is_absolute():
+            # Check if it's in the views directory
+            if (self.views_dir / path.name).exists():
+                path = self.views_dir / path.name
+            # Check if it's in the images directory
+            elif (self.images_dir / path.name).exists():
+                path = self.images_dir / path.name
+
+        # Check if the path is in the views directory
+        if path.parent == self.views_dir:
+            return True
+
+        # Check if the path is registered as a view
+        for img_path, views in self.image_views.items():
+            for v_id, v in views.items():
+                if v.view_path == path or v.view_path.name == path.name:
+                    return True
+
+        return False

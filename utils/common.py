@@ -85,6 +85,10 @@ class DialogMessages:
         self.truncation_history_token_cts: list[int] = []
         # Store remembered information from curly braces
         self.remembered_info: list[str] = []
+        # Store the last image URL to be used with messages
+        self.last_image: Optional[str] = None
+        # Store the initial VQA question (pr_description)
+        self.initial_question: Optional[str] = None
 
     def add_user_prompt(
         self, message: str, allow_append_to_tool_call_results: bool = False
@@ -97,6 +101,11 @@ class DialogMessages:
                 is a tool call result, then the message will be appended to that
                 turn.
         """
+        # If this is the first message and initial_question is not set, store it
+        if not self._message_lists and self.initial_question is None:
+            self.initial_question = message
+            self.logger_for_agent_logs.info(f"Stored initial question: {message}")
+
         if self.is_user_turn():
             self._message_lists.append([TextPrompt(message)])
         else:
@@ -179,47 +188,35 @@ class DialogMessages:
     def get_messages_for_llm_client(self) -> LLMMessages:
         """Returns messages in the format the LM client expects.
 
-        Instead of returning the full conversation history, this implementation:
-        1. Returns only the most recent user message
-        2. Prepends any remembered information (from curly braces) to that message
+        This implementation:
+        1. Returns only the initial message (no conversation history)
+        2. Constructs the message directly from prompts/instruction.py
+        3. Adds any remembered information (from curly braces) to that message
+        4. Uses self.last_image as the only image with the message
         """
-        # If there are no messages, return an empty list
-        if not self._message_lists:
-            return []
+        from prompts.instruction import INSTRUCTION_PROMPT
 
-        # Create a copy of the most recent user message
-        if self.is_user_turn() and len(self._message_lists) >= 2:
-            # We're in a user turn, so get the last user message and last assistant message
-            last_user_messages = self._message_lists[-2]
-            last_assistant_messages = self._message_lists[-1]
-            result = [last_user_messages, last_assistant_messages]
-        elif self.is_assistant_turn() and len(self._message_lists) >= 1:
-            # We're in an assistant turn, so get just the last user message
-            last_user_messages = self._message_lists[-1]
-            result = [last_user_messages]
-        else:
-            # Fallback: just return whatever we have
-            return list(self._message_lists)
+        # Format the instruction prompt with the initial question
+        formatted_prompt = INSTRUCTION_PROMPT.format(pr_description=self.initial_question)
 
-        # If we have remembered information, prepend it to the first user message
-        if self.remembered_info and result and result[0]:
-            # Find the first TextPrompt in the user messages
-            for i, message in enumerate(result[0]):
-                if isinstance(message, TextPrompt):
-                    # Create a new TextPrompt with the remembered information
-                    remembered_text = "Previously remembered information:\n"
-                    remembered_text += "\n".join([f"- {info}" for info in self.remembered_info])
-                    remembered_text += "\n\n" + message.text
+        # Add remembered information if available
+        if self.remembered_info:
+            remembered_text = "Previously remembered information:\n"
+            remembered_text += "\n".join([f"- {info}" for info in self.remembered_info])
+            remembered_text += "\n\n"
 
-                    # Replace the original TextPrompt with our new one
-                    new_prompt = TextPrompt(text=remembered_text)
-                    if hasattr(message, 'image_url') and message.image_url:
-                        new_prompt.image_url = message.image_url
+            # Insert the remembered information at the beginning of the formatted prompt
+            formatted_prompt = remembered_text + formatted_prompt
 
-                    result[0][i] = new_prompt
-                    break
+        # Create a new TextPrompt with the formatted instruction
+        new_prompt = TextPrompt(text=formatted_prompt)
 
-        return result
+        # Use the last_image as the only image with the message
+        if self.last_image:
+            new_prompt.image_url = self.last_image
+
+        # Return a single message list with just this prompt
+        return [[new_prompt]]
 
     def drop_final_assistant_turn(self):
         """Remove the final assistant turn.
@@ -290,8 +287,9 @@ class DialogMessages:
         raise ValueError("No text prompt found in last user prompt")
 
     def clear(self):
-        """Delete all messages."""
+        """Delete all messages and reset state."""
         self._message_lists = []
+        self.initial_question = None
 
     def is_user_turn(self):
         return len(self._message_lists) % 2 == 0

@@ -549,8 +549,8 @@ The smallest remaining view (with the least number of pixels) is identified for 
         image_path = tool_input["image_path"]
 
         # Ensure path is relative to workspace
-        if not image_path.startswith('/'):
-            image_path = str(self.workspace_manager.get_views_dir() / image_path)
+        if isinstance(image_path, str) and not image_path.startswith('/'):
+            image_path = str(self.image_manager.views_dir / image_path)
 
         # Check if image exists
         if not Path(image_path).exists():
@@ -561,10 +561,10 @@ The smallest remaining view (with the least number of pixels) is identified for 
 
         try:
             # Register the view if it's not already registered
-            if image_path.endswith('.png'):
+            if isinstance(image_path, str) and image_path.endswith('.png'):
                 view_name = Path(image_path).name
                 original_image = view_name.split('__')[0] + '.png'
-                original_path = str(self.workspace_manager.get_images_dir() / original_image)
+                original_path = str(self.image_manager.images_dir / original_image)
 
                 # Parse coordinates from view name
                 coords_str = view_name.split('__')[-1].replace('.png', '')
@@ -579,21 +579,23 @@ The smallest remaining view (with the least number of pixels) is identified for 
                     )
 
             # Proceed with blackout
-            if self.image_manager.is_view(image_path):
-                updated_paths = self.image_manager.blackout_view(image_path)
+            # Convert to Path object if it's a string
+            path_obj = Path(image_path) if isinstance(image_path, str) else image_path
+            if self.image_manager.is_view(path_obj):
+                updated_paths = self.image_manager.blackout_view(path_obj)
                 return ToolImplOutput(
-                    tool_output=f"Blacked out view at {image_path}\n"
+                    tool_output=f"Blacked out view at {path_obj}\n"
                                f"Updated {len(updated_paths)} images/views",
-                    tool_result_message=f"Blacked out view at {image_path}"
+                    tool_result_message=f"Blacked out view at {path_obj}"
                 )
             else:
                 # Handle original image blackout
-                img = Image.open(image_path)
+                img = Image.open(path_obj)
                 black_img = Image.new('RGB', img.size, (0, 0, 0))
-                black_img.save(image_path)
+                black_img.save(path_obj)
 
                 # Update all related views
-                for view_id, view in self.image_manager.image_views.get(image_path, {}).items():
+                for view_id, view in self.image_manager.image_views.get(str(path_obj), {}).items():
                     black_view = Image.new('RGB', (
                         view.coordinates[2] - view.coordinates[0],
                         view.coordinates[3] - view.coordinates[1]
@@ -601,8 +603,8 @@ The smallest remaining view (with the least number of pixels) is identified for 
                     black_view.save(view.view_path)
 
                 return ToolImplOutput(
-                    tool_output=f"Blacked out image at {image_path}",
-                    tool_result_message=f"Blacked out image at {image_path}"
+                    tool_output=f"Blacked out image at {path_obj}",
+                    tool_result_message=f"Blacked out image at {path_obj}"
                 )
 
         except Exception as e:

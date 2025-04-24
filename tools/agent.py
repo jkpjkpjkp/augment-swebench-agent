@@ -220,10 +220,6 @@ try breaking down the task into smaller steps and call this tool multiple times.
                 # Get the messages to send to the model
                 messages = self.dialog.get_messages_for_llm_client()
 
-                # Get the current image path if available
-                current_image_path = None
-                if self.last_image_path:
-                    current_image_path = self.last_image_path
 
                 # Call the model
                 model_response, metadata = self.client.generate(
@@ -243,7 +239,7 @@ try breaking down the task into smaller steps and call this tool multiple times.
                         self.run_logger.log_model_response(response_text)
 
                     # Log the MLLM call with all details
-                    images = [current_image_path] if current_image_path else []
+                    images = [self.last_image_path] if self.last_image_path else []
                     self.run_logger.log_mllm_call(
                         messages=messages,
                         model_response=model_response,
@@ -370,6 +366,8 @@ try breaking down the task into smaller steps and call this tool multiple times.
                                 prompt.image_url = image_url
                                 # Add the image to the dialog
                                 self.dialog._message_lists.append([prompt])
+                                # Set the last_image on the dialog for use in get_messages_for_llm_client
+                                self.dialog.last_image = image_url
                                 # Clean the tool result for the VLM
                                 cleaned_result = clean_tool_result(tool_call.tool_name, tool_result, self.workspace_manager.root)
 
@@ -417,6 +415,8 @@ try breaking down the task into smaller steps and call this tool multiple times.
                                     prompt.image_url = img_url
                                     # Add the image to the dialog
                                     self.dialog._message_lists.append([prompt])
+                                    # Set the last_image on the dialog for use in get_messages_for_llm_client
+                                    self.dialog.last_image = img_url
                                 else:
                                     print(f"Error processing cropped image: {error}")
 
@@ -457,6 +457,8 @@ try breaking down the task into smaller steps and call this tool multiple times.
                                     prompt.image_url = img_url
                                     # Add the image to the dialog
                                     self.dialog._message_lists.append([prompt])
+                                    # Set the last_image on the dialog for use in get_messages_for_llm_client
+                                    self.dialog.last_image = img_url
                                 else:
                                     print(f"Error processing blacked out image: {error}")
 
@@ -619,6 +621,7 @@ try breaking down the task into smaller steps and call this tool multiple times.
             self.dialog.clear()
             self.interrupted = False
             self.last_image_path = None
+            self.dialog.last_image = None
             self.processed_images.clear()
 
         # If an initial image is provided, include it with the first message
@@ -644,9 +647,11 @@ try breaking down the task into smaller steps and call this tool multiple times.
                 self.dialog.add_user_prompt("")
                 self.dialog._message_lists[-1] = [prompt]
 
-                # Store the image path
+                # Store the image path and URL
                 self.last_image_path = initial_image_path
                 self.processed_images.add(str(initial_image_path))
+                # Set the last_image on the dialog for use in get_messages_for_llm_client
+                self.dialog.last_image = img_url
 
                 # Log the user message with the image
                 self.run_logger.log_user_message(instruction, image_path=initial_image_path)
@@ -985,4 +990,5 @@ try breaking down the task into smaller steps and call this tool multiple times.
         self.dialog.clear()
         self.interrupted = False
         self.last_image_path = None
+        self.dialog.last_image = None
         self.processed_images.clear()

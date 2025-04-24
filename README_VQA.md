@@ -65,11 +65,6 @@ A list of all images and views in the workspace is automatically included in eve
 
 ## Workflow Example
 
-1. Add an image to the workspace:
-   ```
-   add_image(image_path="path/to/image.jpg")
-   ```
-
 2. Create a view (crop) of the image:
    ```
    crop_image(image_path="images/image.jpg", x1=100, y1=100, x2=300, y2=300)
