@@ -21,8 +21,7 @@ from rich.panel import Panel
 from tools.agent import Agent
 from utils.workspace_manager import WorkspaceManager
 from utils.llm_client import get_client
-from prompts.instruction import INSTRUCTION_PROMPT
-from utils.image_manager import ImageManager
+from prompts.instruction import INSTRUCTION_PROMPT\
 
 def load_vqa_data(parquet_path, task_id='37_3'):
     """Load VQA data from a parquet file.
@@ -164,16 +163,15 @@ def main():
     task_data['image'].save(temp_image_path)
     console.print(f"[bold]Temporary image saved to:[/bold] {temp_image_path}")
 
-    # Use ImageManager to properly register the image
-    image_manager = ImageManager(workspace_path)
-    image_path = image_manager.add_image(temp_image_path, f"{task_data['task_id']}.png")
+    # Initialize workspace manager
+    workspace_manager = WorkspaceManager(root=workspace_path)
+
+    # Use WorkspaceManager to properly register the image
+    image_path = workspace_manager.add_image(temp_image_path, f"{task_data['task_id']}.png")
     console.print(f"[bold]Image added to workspace at:[/bold] {image_path}")
 
     # Remove the temporary image
     temp_image_path.unlink()
-
-    # Initialize workspace manager
-    workspace_manager = WorkspaceManager(root=workspace_path)
 
     # Initialize LLM client (using Gemini-2.5-pro-exp via OpenAI API)
     client = get_client(
@@ -192,12 +190,36 @@ def main():
         log_dir="agent_runs"
     )
 
-    # Format the instruction using the template
-    # Replace the literal curly braces example with double braces to escape them during formatting
-    instruction_template = INSTRUCTION_PROMPT.replace("{important detail to remember}", "{{important detail to remember}}")
-    instruction = instruction_template.format(
-        pr_description=task_data['question'],
-    )
+    # Create a simple instruction with the question
+    instruction = f"""
+I've loaded an image for you to analyze. Consider the following question about the image:
+
+<question>
+{task_data['question']}
+</question>
+
+Can you help me analyze this image and answer the question?
+
+Your task is to thoroughly investigate the image to answer the question extremely accurately.
+
+Example steps:
+0. Zoom-in (cut away unrelated area)
+1. Divide complex images into multiple parts (ALWAYS a good idea)
+2. You may divide them into equal parts, or small, tight bounding boxes of objects of interest
+3. Analyze each view in detail and remember information related to the <question> in curly braces
+4. Mark regions as analyzed by blacking them out
+5. Only report a final answer when you are absolutely sure, based on your analysis.
+6. Only information in curly braces will be remembered between calls
+
+TIPS:
+- Zoom in by repeatedly cropping, until you have a very clear view of the region of interest
+- Create multiple crops to focus on different parts of the image
+- Examine the image section by section
+- Combine examinations and analyze
+- Be detailed in your descriptions of what you see in each view
+- But only report information relevant to the question
+- If you are done with a part, black it out before switching to another one. This helps you keep track of which parts of the image you have already analyzed.
+"""
 
     # Run the agent with the initial image
     logger.info(f"Starting agent with instruction:\n{instruction}\n")

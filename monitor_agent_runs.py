@@ -6,12 +6,9 @@ This script monitors the latest agent runs and checks for any bugs related to im
 It analyzes the run logs and reports any issues found.
 """
 
-import os
-import re
 import json
 import logging
 from pathlib import Path
-from datetime import datetime
 import argparse
 import time
 

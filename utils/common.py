@@ -10,7 +10,6 @@ import subprocess
 
 import jsonschema
 from anthropic import BadRequestError
-from termcolor import colored
 from typing_extensions import final
 
 from utils.token_counter import (
@@ -221,35 +220,41 @@ class DialogMessages:
         new_prompt = TextPrompt(text=formatted_prompt)
 
         # Use the original_image as the only image with the message
-        assert self.original_image
-        assert self.current_view_coordinates
-        assert self.original_image_path
-        try:
-            from PIL import Image
-            from io import BytesIO
-            import base64
+        if self.original_image_path:
+            try:
+                from PIL import Image
+                from io import BytesIO
+                import base64
 
-            # Load the original image
-            img = Image.open(self.original_image_path)
+                # Load the original image
+                img = Image.open(self.original_image_path)
 
-            # Crop to the current view coordinates (already in pixels)
-            x1, y1, x2, y2 = self.current_view_coordinates
+                # If we have current view coordinates, crop the image
+                if self.current_view_coordinates:
+                    x1, y1, x2, y2 = self.current_view_coordinates
+                    # Crop the image
+                    cropped_img = img.crop((x1, y1, x2, y2))
+                else:
+                    # Use the full image
+                    cropped_img = img
 
-            # Crop the image
-            cropped_img = img.crop((x1, y1, x2, y2))
+                # Convert to base64
+                buffered = BytesIO()
+                cropped_img.save(buffered, format="PNG")
+                img_base64 = base64.b64encode(buffered.getvalue()).decode("utf-8")
+                img_url = f"data:image/png;base64,{img_base64}"
 
-            # Convert to base64
-            buffered = BytesIO()
-            cropped_img.save(buffered, format="PNG")
-            img_base64 = base64.b64encode(buffered.getvalue()).decode("utf-8")
-            img_url = f"data:image/png;base64,{img_base64}"
+                # Use the cropped image URL
+                new_prompt.image_url = img_url
 
-            # Use the cropped image URL
-            new_prompt.image_url = img_url
-        except Exception as e:
-            # If there's an error, fall back to the original image
-            self.logger_for_agent_logs.info(f"Error cropping image: {str(e)}")
-            new_prompt.image_url = self.original_image
+                # Store the image URL for future use
+                self.original_image = img_url
+            except Exception as e:
+                # If there's an error, log it
+                self.logger_for_agent_logs.info(f"Error processing image: {str(e)}")
+                # If we have a stored image URL, use it
+                if self.original_image:
+                    new_prompt.image_url = self.original_image
 
         # Return a single message list with just this prompt
         return [[new_prompt]]

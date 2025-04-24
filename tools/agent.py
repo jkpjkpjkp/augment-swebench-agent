@@ -1,9 +1,12 @@
 from copy import deepcopy
 import logging
 import re
+from io import BytesIO
 from pathlib import Path
 from typing import Any, Optional
 
+import base64
+from PIL import Image
 from rich.console import Console
 
 from utils.common import (
@@ -17,7 +20,6 @@ from utils.run_logger import RunLogger
 from utils.text_cleaner import clean_tool_result
 from tools.complete_tool import CompleteTool
 from prompts.instruction import SYSTEM_PROMPT
-from tools.str_replace_tool import StrReplaceEditorTool
 from tools.sequential_thinking_tool import SequentialThinkingTool
 from tools.image_tools import (
     CropTool,
@@ -92,10 +94,14 @@ try breaking down the task into smaller steps and call this tool multiple times.
         self.run_logger = None  # Will be initialized for each run
         self.log_dir = log_dir
 
+        # Track the last image sent to the model
+        self.last_image_path = None
         # Track the original image path
         self.original_image_path = None
         # Track the current view coordinates
         self.current_view_coordinates = None
+        # Track the image paths that have been processed
+        self.processed_images = set()
         self.max_recent_calls = 5
 
         self.dialog = DialogMessages(
@@ -115,13 +121,9 @@ try breaking down the task into smaller steps and call this tool multiple times.
             self.complete_tool,
         ]
 
-        # Initialize the image manager for listing images
-        from utils.image_manager import ImageManager
-        self.image_manager = ImageManager(workspace_manager.root)
+        # We're using the workspace manager for image management
+        # No need to initialize a separate image manager
 
-        # Initialize a counter for consecutive identical tool calls
-        self.consecutive_identical_tool_calls = 0
-        self.last_tool_name = None
 
     def get_image_list(self, simplified: bool = False) -> str:
         """Get a formatted list of all images and views in the workspace.
@@ -132,7 +134,7 @@ try breaking down the task into smaller steps and call this tool multiple times.
         Returns:
             A string containing the list of images and views
         """
-        images = self.image_manager.list_images()
+        images = self.workspace_manager.list_images()
 
         if not images:
             return "No images found in the workspace."
@@ -147,12 +149,11 @@ try breaking down the task into smaller steps and call this tool multiple times.
                 size = get_image_size(img_path)
                 result += f"- {img_path.name} ({size[0]}x{size[1]})\n"
 
-                # Add views for this image (simplified)
-                views = self.image_manager.list_views(img_path)
+                views = self.workspace_manager.list_views(img_path)
                 if views:
                     result += "  Views:\n"
                     for view_path in views:
-                        view_info = self.image_manager.get_view_info(view_path)
+                        view_info = self.workspace_manager.get_view_info(view_path)
                         # Just include the view name and size, not the full path or coordinates
                         result += f"  - {view_path.name} ({view_info['size'][0]}x{view_info['size'][1]})\n"
         else:
@@ -166,11 +167,11 @@ try breaking down the task into smaller steps and call this tool multiple times.
                 result += f"- {img_path.name} ({size[0]}x{size[1]})\n"
 
                 # Add views for this image
-                views = self.image_manager.list_views(img_path)
+                views = self.workspace_manager.list_views(img_path)
                 if views:
                     result += "  Views:\n"
                     for view_path in views:
-                        view_info = self.image_manager.get_view_info(view_path)
+                        view_info = self.workspace_manager.get_view_info(view_path)
                         result += f"  - {view_path.name} ({view_info['size'][0]}x{view_info['size'][1]}) - Coordinates: {view_info['coordinates']}\n"
 
         return result
@@ -197,8 +198,7 @@ try breaking down the task into smaller steps and call this tool multiple times.
         while remaining_turns > 0:
             remaining_turns -= 1
 
-            delimiter = "-" * 45 + " NEW TURN " + "-" * 45
-            self.logger_for_agent_logs.info(f"\n{delimiter}\n")
+            self.logger_for_agent_logs.info("\n" + "-" * 45 + " NEW TURN " + "-" * 45 +"\n")
 
             if self.dialog.use_prompt_budgeting:
                 current_tok_count = self.dialog.count_tokens()
@@ -219,7 +219,6 @@ try breaking down the task into smaller steps and call this tool multiple times.
             try:
                 # Get the messages to send to the model
                 messages = self.dialog.get_messages_for_llm_client()
-
 
                 # Call the model
                 model_response, metadata = self.client.generate(
@@ -255,36 +254,21 @@ try breaking down the task into smaller steps and call this tool multiple times.
                     # Extract tool calls from code blocks in the model's text response
                     text_results = [item for item in model_response if isinstance(item, TextResult)]
                     if text_results:
-                        self.logger_for_agent_logs.info(f"Checking for tool calls in text: {text_results[0].text[:200]}...")
                         code_block_tool_calls = self._extract_tool_calls_from_code_blocks(text_results[0].text)
                         if code_block_tool_calls:
-                            self.logger_for_agent_logs.info(f"Found code block tool calls: {[call.tool_name for call in code_block_tool_calls]}")
-                            for call in code_block_tool_calls:
-                                self.logger_for_agent_logs.info(f"Tool call details - Name: {call.tool_name}, Input: {call.tool_input}")
                             pending_tool_calls = code_block_tool_calls
 
                 if len(pending_tool_calls) == 0:
                     # No tools were called, so default to blackout tool if the original image is not all black
-                    if self.original_image_path:
+                    if self.last_image_path:
                         try:
-                            # Import locally to avoid scope issues
                             from PIL import Image
                             import numpy as np
 
                             # Check if the image is all black
-                            with Image.open(self.original_image_path) as img:
-                                # If we have current view coordinates, check only that region
-                                if self.current_view_coordinates:
-                                    x1, y1, x2, y2 = self.current_view_coordinates
-                                    # Coordinates are already in pixels
-                                    view = img.crop((x1, y1, x2, y2))
-                                    img_array = np.array(view)
-                                else:
-                                    img_array = np.array(img)
-
-                                is_black = np.mean(img_array) < 1.0  # Image is essentially all black
-
-                            if is_black:
+                            img = Image.open(self.last_image_path)
+                            img_array = np.array(img)
+                            if np.mean(img_array) < 1.0:  # Image is essentially all black
                                 # If image is all black, complete the task
                                 self.logger_for_agent_logs.info("[image is all black, completing task]")
                                 return ToolImplOutput(
@@ -295,21 +279,7 @@ try breaking down the task into smaller steps and call this tool multiple times.
                                 # If image is not all black, use blackout tool
                                 self.logger_for_agent_logs.info("[no tools were called, defaulting to blackout tool]")
                                 blackout_tool = next(t for t in self.tools if t.name == "blackout_image")
-
-                                # If we have current view coordinates, blackout that region
-                                if self.current_view_coordinates:
-                                    # Create a virtual path for the current view
-                                    from utils.image_manager import ImageView
-                                    view_obj = ImageView(
-                                        view_id="current_view",
-                                        original_image_path=self.original_image_path,
-                                        coordinates=self.current_view_coordinates
-                                    )
-                                    tool_input = {"image_path": str(view_obj.view_path)}
-                                else:
-                                    # Blackout the entire image
-                                    tool_input = {"image_path": str(self.original_image_path)}
-
+                                tool_input = {"image_path": str(self.last_image_path)}
                                 result = blackout_tool.run(tool_input, deepcopy(self.dialog))
                                 return ToolImplOutput(
                                     tool_output=result,
@@ -375,19 +345,11 @@ try breaking down the task into smaller steps and call this tool multiple times.
                             path_match = re.search(r"Switched to image at ([^\n]+)", tool_result)
                             if path_match:
                                 image_path = Path(path_match.group(1))
-                                # Set as the original image
-                                self.original_image_path = image_path
-                                self.dialog.original_image_path = image_path
-                                # Reset view coordinates when switching images
-                                self.current_view_coordinates = None
-                                self.dialog.current_view_coordinates = None
+                                self.last_image_path = image_path
 
                             # Check if we have aux_data with the image URL
                             if hasattr(result, 'aux_data') and result.aux_data and 'image_url' in result.aux_data:
                                 image_url = result.aux_data['image_url']
-                                # Set the original image URL
-                                self.dialog.original_image = image_url
-
                                 # Get the simplified list of images for the VLM
                                 image_list = self.get_image_list(simplified=True)
 
@@ -396,7 +358,6 @@ try breaking down the task into smaller steps and call this tool multiple times.
                                 prompt.image_url = image_url
                                 # Add the image to the dialog
                                 self.dialog._message_lists.append([prompt])
-
                                 # Clean the tool result for the VLM
                                 cleaned_result = clean_tool_result(tool_call.tool_name, tool_result, self.workspace_manager.root)
 
@@ -404,8 +365,8 @@ try breaking down the task into smaller steps and call this tool multiple times.
                                 self.dialog.add_tool_call_result(tool_call, cleaned_result)
 
                                 # Log the tool result with the image
-                                if self.run_logger and self.original_image_path:
-                                    self.run_logger.log_tool_result(tool_result, image_path=self.original_image_path)
+                                if self.run_logger and self.last_image_path:
+                                    self.run_logger.log_tool_result(tool_result, image_path=self.last_image_path)
                             else:
                                 # Clean the tool result for the VLM
                                 cleaned_result = clean_tool_result(tool_call.tool_name, tool_result, self.workspace_manager.root)
@@ -415,44 +376,55 @@ try breaking down the task into smaller steps and call this tool multiple times.
 
                                 # Log the tool result with the image if available
                                 if self.run_logger:
-                                    if self.original_image_path:
-                                        self.run_logger.log_tool_result(tool_result, image_path=self.original_image_path)
+                                    if self.last_image_path:
+                                        self.run_logger.log_tool_result(tool_result, image_path=self.last_image_path)
                                     else:
                                         self.run_logger.log_tool_result(tool_result)
 
                         # For crop_image tool
                         elif tool_call.tool_name == "crop_image":
-                            # Extract the bbox coordinates from the tool input
-                            bbox = tool_call.tool_input.get("bbox", [0, 0, 1000, 1000])
+                            # Extract the new view path
+                            path_match = re.search(r"Created new view at ([^\n]+)", tool_result)
+                            if path_match:
+                                view_path = Path(path_match.group(1))
+                                self.last_image_path = view_path
 
-                            # Convert normalized coordinates [0, 1000] to pixel coordinates
-                            if self.original_image_path:
-                                from PIL import Image
-                                img = Image.open(self.original_image_path)
-                                img_width, img_height = img.size
+                                # Load the image and send it to the model
+                                try:
+                                    # Use imports from the top of the file
 
-                                x1, y1, x2, y2 = bbox
-                                pixel_x1 = int(x1 * img_width / 1000)
-                                pixel_y1 = int(y1 * img_height / 1000)
-                                pixel_x2 = int(x2 * img_width / 1000)
-                                pixel_y2 = int(y2 * img_height / 1000)
+                                    # Load the image
+                                    img = Image.open(view_path)
 
-                                # Store the current view coordinates in pixels
-                                self.current_view_coordinates = (pixel_x1, pixel_y1, pixel_x2, pixel_y2)
-                                self.dialog.current_view_coordinates = (pixel_x1, pixel_y1, pixel_x2, pixel_y2)
-                            else:
-                                # If no original image, just store the normalized coordinates
-                                self.current_view_coordinates = bbox
-                                self.dialog.current_view_coordinates = bbox
+                                    # Crop to remove black regions
+                                    from utils.image_utils import crop_to_remove_black_regions
+                                    img = crop_to_remove_black_regions(img)
 
-                            # Get the simplified list of images for the VLM
-                            image_list = self.get_image_list(simplified=True)
+                                    # Resize if needed
+                                    max_size = (1500, 1500)
+                                    if img.width > max_size[0] or img.height > max_size[1]:
+                                        ratio = min(max_size[0] / img.width, max_size[1] / img.height)
+                                        new_size = (int(img.width * ratio), int(img.height * ratio))
+                                        img = img.resize(new_size, Image.LANCZOS)
 
-                            # Create a new user prompt with the cropped image
-                            # The actual cropping happens in get_messages_for_llm_client
-                            prompt = TextPrompt(text="Here's the cropped view I requested. Let me analyze it.")
-                            # Add the prompt to the dialog
-                            self.dialog._message_lists.append([prompt])
+                                    # Convert to base64
+                                    buffered = BytesIO()
+                                    img.save(buffered, format="PNG")
+                                    img_base64 = base64.b64encode(buffered.getvalue()).decode("utf-8")
+                                    img_url = f"data:image/png;base64,{img_base64}"
+                                    # Log a message without the full base64 string
+                                    print("Created image URL for cropped view (base64 data omitted)")
+
+                                    # Get the simplified list of images for the VLM
+                                    image_list = self.get_image_list(simplified=True)
+
+                                    # Create a new user prompt with the image
+                                    prompt = TextPrompt(text="Here's the cropped view I requested. Let me analyze it.")
+                                    prompt.image_url = img_url
+                                    # Add the image to the dialog
+                                    self.dialog._message_lists.append([prompt])
+                                except Exception as e:
+                                    print(f"Error processing cropped image: {str(e)}")
 
                             # Clean the tool result for the VLM
                             cleaned_result = clean_tool_result(tool_call.tool_name, tool_result, self.workspace_manager.root)
@@ -461,43 +433,56 @@ try breaking down the task into smaller steps and call this tool multiple times.
                             self.dialog.add_tool_call_result(tool_call, cleaned_result)
 
                             # Log the tool result with the image if available
-                            if self.run_logger and self.original_image_path:
-                                self.run_logger.log_tool_result(tool_result, image_path=self.original_image_path)
-                            else:
-                                self.run_logger.log_tool_result(tool_result)
+                            if self.run_logger:
+                                if self.last_image_path:
+                                    self.run_logger.log_tool_result(tool_result, image_path=self.last_image_path)
+                                else:
+                                    self.run_logger.log_tool_result(tool_result)
 
                         # For blackout_image tool
                         elif tool_call.tool_name == "blackout_image":
-                            # Get the image path from the tool input
-                            image_path = tool_call.tool_input.get("image_path", "")
+                            # Extract the blacked out view path
+                            path_match = re.search(r"Blacked out (view|image) at ([^\n]+)", tool_result)
+                            if path_match:
+                                view_path = Path(path_match.group(2))
+                                self.last_image_path = view_path
 
-                            # If this is a view (has coordinates in the path), extract them
-                            if "__" in image_path:
+                                # Load the image and send it to the model
                                 try:
-                                    # Parse the coordinates from the path
-                                    parts = Path(image_path).stem.split("__")
-                                    if len(parts) >= 3:
-                                        coords_str = parts[2]
-                                        coords = tuple(map(int, coords_str.split("_")))
-                                        if len(coords) == 4:
-                                            # These are the coordinates to blackout
-                                            self.current_view_coordinates = coords
-                                            self.dialog.current_view_coordinates = coords
+                                    # Use imports from the top of the file
+
+                                    # Load the image
+                                    img = Image.open(view_path)
+
+                                    # Crop to remove black regions
+                                    from utils.image_utils import crop_to_remove_black_regions
+                                    img = crop_to_remove_black_regions(img)
+
+                                    # Resize if needed
+                                    max_size = (1500, 1500)
+                                    if img.width > max_size[0] or img.height > max_size[1]:
+                                        ratio = min(max_size[0] / img.width, max_size[1] / img.height)
+                                        new_size = (int(img.width * ratio), int(img.height * ratio))
+                                        img = img.resize(new_size, Image.LANCZOS)
+
+                                    # Convert to base64
+                                    buffered = BytesIO()
+                                    img.save(buffered, format="PNG")
+                                    img_base64 = base64.b64encode(buffered.getvalue()).decode("utf-8")
+                                    img_url = f"data:image/png;base64,{img_base64}"
+                                    # Log a message without the full base64 string
+                                    print("Created image URL for blacked out view (base64 data omitted)")
+
+                                    # Get the simplified list of images for the VLM
+                                    image_list = self.get_image_list(simplified=True)
+
+                                    # Create a new user prompt with the image
+                                    prompt = TextPrompt(text="I've blacked out this region. Here's the updated image, cropped to focus on the remaining non-black areas.")
+                                    prompt.image_url = img_url
+                                    # Add the image to the dialog
+                                    self.dialog._message_lists.append([prompt])
                                 except Exception as e:
-                                    print(f"Error parsing coordinates from path: {str(e)}")
-
-                            # After blackout, we should reset the view coordinates
-                            # since we're now looking at the full image again
-                            self.current_view_coordinates = None
-                            self.dialog.current_view_coordinates = None
-
-                            # Get the simplified list of images for the VLM
-                            image_list = self.get_image_list(simplified=True)
-
-                            # Create a new user prompt with the updated image
-                            prompt = TextPrompt(text="I've blacked out this region. Here's the updated image, cropped to focus on the remaining non-black areas.")
-                            # Add the prompt to the dialog
-                            self.dialog._message_lists.append([prompt])
+                                    print(f"Error processing blacked out image: {str(e)}")
 
                             # Clean the tool result for the VLM
                             cleaned_result = clean_tool_result(tool_call.tool_name, tool_result, self.workspace_manager.root)
@@ -506,10 +491,11 @@ try breaking down the task into smaller steps and call this tool multiple times.
                             self.dialog.add_tool_call_result(tool_call, cleaned_result)
 
                             # Log the tool result with the image if available
-                            if self.run_logger and self.original_image_path:
-                                self.run_logger.log_tool_result(tool_result, image_path=self.original_image_path)
-                            else:
-                                self.run_logger.log_tool_result(tool_result)
+                            if self.run_logger:
+                                if self.last_image_path:
+                                    self.run_logger.log_tool_result(tool_result, image_path=self.last_image_path)
+                                else:
+                                    self.run_logger.log_tool_result(tool_result)
 
                         # For all other tools
                         else:
@@ -656,21 +642,33 @@ try breaking down the task into smaller steps and call this tool multiple times.
         else:
             self.dialog.clear()
             self.interrupted = False
-            self.original_image_path = None
-            self.current_view_coordinates = None
-            self.dialog.original_image = None
-            self.dialog.original_image_path = None
-            self.dialog.current_view_coordinates = None
+            self.last_image_path = None
+            self.processed_images.clear()
 
         # If an initial image is provided, include it with the first message
         if initial_image_path is not None and not resume:
             try:
-                # Process the image using our helper method
-                img_url, error = self._process_image_to_base64(initial_image_path)
+                # Use imports from the top of the file
 
-                if not img_url:
-                    raise Exception(error)
+                # Load the image
+                img = Image.open(initial_image_path)
 
+                # Crop to remove black regions
+                from utils.image_utils import crop_to_remove_black_regions
+                img = crop_to_remove_black_regions(img)
+
+                # Resize if needed
+                max_size = (1500, 1500)
+                if img.width > max_size[0] or img.height > max_size[1]:
+                    ratio = min(max_size[0] / img.width, max_size[1] / img.height)
+                    new_size = (int(img.width * ratio), int(img.height * ratio))
+                    img = img.resize(new_size, Image.LANCZOS)
+
+                # Convert to base64
+                buffered = BytesIO()
+                img.save(buffered, format="PNG")
+                img_base64 = base64.b64encode(buffered.getvalue()).decode("utf-8")
+                img_url = f"data:image/png;base64,{img_base64}"
                 # Log a message without the full base64 string
                 print("Created image URL for initial image (base64 data omitted)")
 
@@ -681,18 +679,18 @@ try breaking down the task into smaller steps and call this tool multiple times.
                 prompt = TextPrompt(text=f"{instruction}\n\n{image_list}")
                 prompt.image_url = img_url
 
-                # Add the prompt to the dialog
-                self.dialog.add_user_prompt("")
+                # Add the prompt to the dialog and set the initial question
+                self.dialog.add_user_prompt(instruction)
                 self.dialog._message_lists[-1] = [prompt]
 
-                # Store the original image path and URL
+                # Make sure the initial question is set
+                if self.dialog.initial_question is None:
+                    self.dialog.initial_question = instruction
+
+                # Store the image path
+                self.last_image_path = initial_image_path
                 self.original_image_path = initial_image_path
-                # Set the original_image on the dialog for use in get_messages_for_llm_client
-                self.dialog.original_image = img_url
-                self.dialog.original_image_path = initial_image_path
-                # Initialize with no view coordinates (showing the full image)
-                self.current_view_coordinates = None
-                self.dialog.current_view_coordinates = None
+                self.processed_images.add(str(initial_image_path))
 
                 # Log the user message with the image
                 self.run_logger.log_user_message(instruction, image_path=initial_image_path)
@@ -886,159 +884,96 @@ try breaking down the task into smaller steps and call this tool multiple times.
         import re
 
         # Find all code blocks with tool_code tag
-        code_block_pattern = r"```+tool_code\s*(.*?)\s*```+"
+        code_block_pattern = r"```tool_code\s*(.*?)\s*```"
         code_blocks = re.findall(code_block_pattern, text, re.DOTALL)
-
-        # Also try with just backticks if no tool_code blocks found
-        if not code_blocks:
-            self.logger_for_agent_logs.info("No tool_code blocks found, trying with regular code blocks")
-            code_block_pattern = r"```+\s*(.*?)\s*```+"
-            code_blocks = re.findall(code_block_pattern, text, re.DOTALL)
-
-        self.logger_for_agent_logs.info(f"Found {len(code_blocks)} code blocks")
 
         if not code_blocks:
             return []
 
         tool_calls = []
 
-        for i, code_block in enumerate(code_blocks):
+        for code_block in code_blocks:
             # Extract function name and arguments
             try:
-                self.logger_for_agent_logs.info(f"Processing code block {i+1}: {code_block.strip()}")
-
                 # Parse the function call
                 function_pattern = r"(\w+)\((.*)\)"
                 match = re.match(function_pattern, code_block.strip())
 
-                if not match:
-                    self.logger_for_agent_logs.info(f"No function call pattern match in code block {i+1}")
-                    continue
+                if match:
+                    function_name = match.group(1)
+                    args_str = match.group(2)
 
-                # We have a match
-                function_name = match.group(1)
-                args_str = match.group(2)
+                    # Parse the arguments
+                    tool_input = {}
 
-                # Parse the arguments
-                tool_input = {}
+                    # Handle different argument formats
+                    if function_name == "crop_image" and "bbox=" in args_str:
+                        # Handle bbox parameter for crop_image
+                        bbox_match = re.search(r"bbox=\[(.*?)\]", args_str)
+                        if bbox_match:
+                            bbox_values = [int(x.strip()) for x in bbox_match.group(1).split(",")]
+                            if len(bbox_values) == 4:
+                                tool_input = {
+                                    "x1": bbox_values[0],
+                                    "y1": bbox_values[1],
+                                    "x2": bbox_values[2],
+                                    "y2": bbox_values[3]
+                                }
 
-                # Handle different argument formats
-                if function_name == "crop_image" and "bbox=" in args_str:
-                    # Handle bbox parameter for crop_image
-                    bbox_match = re.search(r"bbox=\[(.*?)\]", args_str)
-                    if bbox_match:
-                        bbox_values = [int(x.strip()) for x in bbox_match.group(1).split(",")]
-                        if len(bbox_values) == 4:
-                            # Keep the original bbox parameter
-                            tool_input = {
-                                "bbox": bbox_values
-                            }
+                                # If there's an image_path parameter, extract it
+                                image_path_match = re.search(r"image_path=['\"]?(.*?)['\"]?(?:,|\))", args_str)
+                                if image_path_match:
+                                    tool_input["image_path"] = image_path_match.group(1)
+                    else:
+                        # For other functions, try to parse the arguments as a Python dict
+                        try:
+                            # Add curly braces to make it a valid dict string
+                            dict_str = "{" + args_str + "}"
+                            # Replace any single quotes with double quotes for JSON compatibility
+                            dict_str = dict_str.replace("'", '"')
+                            # Parse the dict
+                            import json
+                            tool_input = json.loads(dict_str)
+                        except json.JSONDecodeError:
+                            # If that fails, try to parse individual key-value pairs
+                            for pair in args_str.split(","):
+                                if "=" in pair:
+                                    key, value = pair.split("=", 1)
+                                    key = key.strip()
+                                    value = value.strip()
 
-                            # If there's an image_path parameter, extract it
-                            image_path_match = re.search(r"image_path=['\"]?(.*?)['\"]?(?:,|\))", args_str)
-                            if image_path_match:
-                                tool_input["image_path"] = image_path_match.group(1)
-                else:
-                    # For other functions, try to parse the arguments as a Python dict
-                    try:
-                        # Add curly braces to make it a valid dict string
-                        dict_str = "{" + args_str + "}"
-                        # Replace any single quotes with double quotes for JSON compatibility
-                        dict_str = dict_str.replace("'", '"')
-                        # Parse the dict
-                        import json
-                        tool_input = json.loads(dict_str)
-                    except json.JSONDecodeError:
-                        # If that fails, try to parse individual key-value pairs
-                        for pair in args_str.split(","):
-                            if "=" in pair:
-                                key, value = pair.split("=", 1)
-                                key = key.strip()
-                                value = value.strip()
+                                    # Try to convert value to appropriate type
+                                    try:
+                                        # Remove quotes if present
+                                        if (value.startswith('"') and value.endswith('"')) or \
+                                           (value.startswith("'") and value.endswith("'")):
+                                            value = value[1:-1]
+                                        # Try to convert to int or float if appropriate
+                                        elif value.isdigit():
+                                            value = int(value)
+                                        elif value.replace(".", "", 1).isdigit():
+                                            value = float(value)
+                                    except:
+                                        pass
 
-                                # Try to convert value to appropriate type
-                                try:
-                                    # Remove quotes if present
-                                    if (value.startswith('"') and value.endswith('"')) or \
-                                       (value.startswith("'") and value.endswith("'")):
-                                        value = value[1:-1]
-                                    # Try to convert to int or float if appropriate
-                                    elif value.isdigit():
-                                        value = int(value)
-                                    elif value.replace(".", "", 1).isdigit():
-                                        value = float(value)
-                                except:
-                                    pass
+                                    tool_input[key] = value
 
-                                tool_input[key] = value
+                    # Create a ToolCallParameters object
+                    tool_call = ToolCallParameters(
+                        tool_call_id=f"code_block_{len(tool_calls)}",
+                        tool_name=function_name,
+                        tool_input=tool_input
+                    )
 
-                # Create a ToolCallParameters object
-                tool_call = ToolCallParameters(
-                    tool_call_id=f"code_block_{len(tool_calls)}",
-                    tool_name=function_name,
-                    tool_input=tool_input
-                )
-
-                tool_calls.append(tool_call)
+                    tool_calls.append(tool_call)
             except Exception as e:
                 self.logger_for_agent_logs.info(f"Error parsing code block: {str(e)}")
 
         return tool_calls
 
-    def _process_image_to_base64(self, image_path, view_coordinates=None):
-        """Process an image and convert it to base64 for display.
-
-        Args:
-            image_path: Path to the image file
-            view_coordinates: Optional coordinates to crop the image [x1, y1, x2, y2]
-
-        Returns:
-            Tuple of (image_url, error_message)
-            image_url will be None if there was an error
-            error_message will be None if there was no error
-        """
-        try:
-            # Import all required modules locally to avoid scope issues
-            from PIL import Image
-            from io import BytesIO
-            import base64
-            from utils.image_utils import crop_to_remove_black_regions
-
-            # Load the image
-            img = Image.open(image_path)
-
-            # If view coordinates are provided, crop the image
-            if view_coordinates:
-                x1, y1, x2, y2 = view_coordinates
-                # Coordinates are already in pixels
-                img = img.crop((x1, y1, x2, y2))
-
-            # Crop to remove black regions
-            img = crop_to_remove_black_regions(img)
-
-            # Resize if needed
-            max_size = (1500, 1500)
-            if img.width > max_size[0] or img.height > max_size[1]:
-                ratio = min(max_size[0] / img.width, max_size[1] / img.height)
-                new_size = (int(img.width * ratio), int(img.height * ratio))
-                img = img.resize(new_size, Image.LANCZOS)
-
-            # Convert to base64
-            buffered = BytesIO()
-            img.save(buffered, format="PNG")
-            img_base64 = base64.b64encode(buffered.getvalue()).decode("utf-8")
-            img_url = f"data:image/png;base64,{img_base64}"
-
-            return img_url, None
-        except Exception as e:
-            error_message = f"Error processing image: {str(e)}"
-            return None, error_message
-
     def clear(self):
         self.dialog.clear()
         self.interrupted = False
-        self.original_image_path = None
-        self.current_view_coordinates = None
-        self.dialog.original_image = None
-        self.dialog.original_image_path = None
-        self.dialog.current_view_coordinates = None
+        self.last_image_path = None
+        self.processed_images.clear()
+        self.recent_tool_calls.clear()

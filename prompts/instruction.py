@@ -24,20 +24,17 @@ Make sure to call the complete tool when you are done with the task, or when you
 
 
 INSTRUCTION_PROMPT = """
-I've loaded an image for you to analyze. Consider the following question about the image:
-
+Question:
 <question>
 {pr_description}
 </question>
 
 Can you help me analyze this image and answer the question?
 
-Your task is to thoroughly investigate the image to answer the question extremely accurately.
-
 Example steps:
 0. Zoom-in (cut away unrelated area)
 1. Divide complex images into multiple parts (ALWAYS a good idea)
-2. You may divide them into equal parts, or small, tight bounding boxes of objects of interest
+2. You may divide them into equal parts, or boxes of interest
 3. Analyze each view in detail and remember information related to the <question> in curly braces
 4. Mark regions as analyzed by blacking them out
 5. Only report a final answer when you are absolutely sure, based on your analysis.

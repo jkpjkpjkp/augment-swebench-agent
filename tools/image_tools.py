@@ -17,8 +17,7 @@ from utils.common import (
     LLMTool,
     ToolImplOutput,
 )
-from utils.workspace_manager import WorkspaceManager
-from utils.image_manager import ImageManager, ImageView
+from utils.workspace_manager import WorkspaceManager, ImageView
 from utils.image_utils import (
     get_image_size,
 )
@@ -69,7 +68,6 @@ Example: To crop the top-left quarter of the image, use bbox=[0, 0, 500, 500]
         """
         super().__init__()
         self.workspace_manager = workspace_manager
-        self.image_manager = ImageManager(workspace_manager.root)
 
         # Initialize class attributes if they don't exist
         if not hasattr(CropTool, "last_selected_image"):
@@ -131,11 +129,11 @@ Example: To crop the top-left quarter of the image, use bbox=[0, 0, 500, 500]
                 )
 
             # Check if this is a view or an original image
-            is_view = self.image_manager.is_view(image_path)
+            is_view = self.workspace_manager.is_view(image_path)
 
             if is_view:
                 # If it's a view, we need to find the original image and adjust coordinates
-                for orig_path, views in self.image_manager.image_views.items():
+                for orig_path, views in self.workspace_manager.image_views.items():
                     for v_id, v in views.items():
                         if v.view_path == image_path or v.view_path.name == image_path.name:
                             # Found the view
@@ -168,7 +166,7 @@ Example: To crop the top-left quarter of the image, use bbox=[0, 0, 500, 500]
                             print(f"CropTool: Adjusting coordinates from {bbox} to {adjusted_coords} relative to original image")
 
                             # Create the view with the adjusted coordinates
-                            view_path = self.image_manager.create_view(
+                            view_path = self.workspace_manager.create_view(
                                 orig_path, view_id, adjusted_coords
                             )
                             break
@@ -200,10 +198,10 @@ Example: To crop the top-left quarter of the image, use bbox=[0, 0, 500, 500]
 
                 # Create the view with pixel coordinates
                 coordinates = (pixel_x1, pixel_y1, pixel_x2, pixel_y2)
-                view_path = self.image_manager.create_view(image_path, view_id, coordinates)
+                view_path = self.workspace_manager.create_view(image_path, view_id, coordinates)
 
             # Get information about the created view
-            view_info = self.image_manager.get_view_info(view_path)
+            view_info = self.workspace_manager.get_view_info(view_path)
 
             # Update the current view coordinates for future crops
             CropTool.current_view_coords = view_info['coordinates']
@@ -258,13 +256,13 @@ class SwitchImageTool(LLMTool):
     def description(self) -> str:
         """Dynamically generate the tool description with the list of available images."""
         # Get the list of all available images
-        all_images = self.image_manager.list_images() if hasattr(self, 'image_manager') else []
+        all_images = self.workspace_manager.list_images() if hasattr(self, 'workspace_manager') else []
         all_views = []
 
         if all_images:
             for img in all_images:
-                if hasattr(self, 'image_manager'):
-                    views = self.image_manager.list_views(img)
+                if hasattr(self, 'workspace_manager'):
+                    views = self.workspace_manager.list_views(img)
                     all_views.extend(views)
 
         # Create a formatted list of all images
@@ -295,7 +293,6 @@ After switching to an image, you can create views (crops) of specific regions us
         """
         super().__init__()
         self.workspace_manager = workspace_manager
-        self.image_manager = ImageManager(workspace_manager.root)
 
         # Store the last selected image path for use by other tools
         # This is a class variable shared across all instances
@@ -334,7 +331,7 @@ After switching to an image, you can create views (crops) of specific regions us
         view_found = False
 
         # Try to find a view with this ID
-        for img_path, views in self.image_manager.image_views.items():
+        for img_path, views in self.workspace_manager.image_views.items():
             if path_str in views:
                 image_path = views[path_str].view_path
                 view_found = True
@@ -370,12 +367,12 @@ After switching to an image, you can create views (crops) of specific regions us
             size = get_image_size(image_path)
 
             # Check if this is a view
-            is_view = image_path.parent == self.image_manager.views_dir
+            is_view = image_path.parent == self.workspace_manager.views_dir
 
             if is_view:
                 # Try to get view information
                 try:
-                    view_info = self.image_manager.get_view_info(image_path)
+                    view_info = self.workspace_manager.get_view_info(image_path)
                     return ToolImplOutput(
                         tool_output=f"Switched to view at {image_path}\n"
                                    f"View ID: {view_info['view_id']}\n"
@@ -535,7 +532,6 @@ The smallest remaining view (with the least number of pixels) is identified for 
         """
         super().__init__()
         self.workspace_manager = workspace_manager
-        self.image_manager = ImageManager(workspace_manager.root)
 
     def run_impl(
         self,
@@ -598,7 +594,7 @@ The smallest remaining view (with the least number of pixels) is identified for 
                             coords_str = parts[2]
 
                             # Find the original image
-                            for img_path in self.image_manager.list_images():
+                            for img_path in self.workspace_manager.list_images():
                                 if img_path.stem == original_name:
                                     original_image_path = img_path
                                     break
@@ -626,7 +622,7 @@ The smallest remaining view (with the least number of pixels) is identified for 
                     coordinates = view_obj.coordinates
 
                 # Blackout the region in the original image
-                updated_paths = self.image_manager.blackout_view(view_obj.view_path)
+                self.workspace_manager.blackout_view(view_obj.view_path)
 
                 return ToolImplOutput(
                     tool_output=f"Blacked out region at coordinates {coordinates} in the original image",
@@ -647,8 +643,8 @@ The smallest remaining view (with the least number of pixels) is identified for 
                     black_img.save(path_obj)
 
                     # Clear all views for this image
-                    if str(path_obj) in self.image_manager.image_views:
-                        self.image_manager.image_views[str(path_obj)] = {}
+                    if str(path_obj) in self.workspace_manager.image_views:
+                        self.workspace_manager.image_views[str(path_obj)] = {}
 
                     return ToolImplOutput(
                         tool_output=f"Blacked out entire image at {path_obj}",
