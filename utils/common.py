@@ -92,6 +92,8 @@ class DialogMessages:
         self.original_image: Optional[str] = None
         # Store the original image path
         self.original_image_path: Optional[Path] = None
+        # Store the current selected image path (original or view)
+        self.current_image_path: Optional[Path] = None
         # Store the current view coordinates [x1, y1, x2, y2]
         self.current_view_coordinates: Optional[list[int]] = None
         # Store the initial VQA question (pr_description)
@@ -202,10 +204,11 @@ class DialogMessages:
         4. Uses self.original_image as the only image with the message
         5. If current_view_coordinates are set, crops the original image to those coordinates
         """
-        from prompts.instruction import INSTRUCTION_PROMPT
+        # No need to import INSTRUCTION_PROMPT anymore
 
         # Format the instruction prompt with the initial question
-        formatted_prompt = INSTRUCTION_PROMPT.format(pr_description=self.initial_question)
+        # Skip the INSTRUCTION_PROMPT and use the initial question directly
+        formatted_prompt = self.initial_question
 
         # Add remembered information if available
         if self.remembered_info:
@@ -221,6 +224,15 @@ class DialogMessages:
 
         # Use the original_image as the only image with the message
         if self.original_image_path:
+            self.logger_for_agent_logs.info(f"Original image path: {self.original_image_path}")
+            # Set default view coordinates if none are set
+            if self.current_view_coordinates is None:
+                # Use the full image dimensions
+                from PIL import Image
+                img = Image.open(self.original_image_path)
+                width, height = img.size
+                self.current_view_coordinates = [0, 0, width, height]
+                self.logger_for_agent_logs.info(f"Set default view coordinates to full image: {self.current_view_coordinates}")
             try:
                 from PIL import Image
                 from io import BytesIO
@@ -232,11 +244,40 @@ class DialogMessages:
                 # If we have current view coordinates, crop the image
                 if self.current_view_coordinates:
                     x1, y1, x2, y2 = self.current_view_coordinates
+                    self.logger_for_agent_logs.info(f"IMPORTANT: Cropping image with coordinates: {self.current_view_coordinates}")
+
+                    # Check if the coordinates are valid
+                    if x1 < 0 or y1 < 0 or x2 > img.width or y2 > img.height:
+                        self.logger_for_agent_logs.info(f"IMPORTANT: Invalid coordinates! Image size: {img.width}x{img.height}, Coordinates: {self.current_view_coordinates}")
+                        # Adjust coordinates to fit within the image
+                        x1 = max(0, x1)
+                        y1 = max(0, y1)
+                        x2 = min(img.width, x2)
+                        y2 = min(img.height, y2)
+                        self.logger_for_agent_logs.info(f"IMPORTANT: Adjusted coordinates to: [{x1}, {y1}, {x2}, {y2}]")
+
                     # Crop the image
                     cropped_img = img.crop((x1, y1, x2, y2))
+                    # Log the size of the cropped image
+                    self.logger_for_agent_logs.info(f"IMPORTANT: Cropped image size: {cropped_img.size}")
+
+                    # Save the cropped image for debugging
+                    debug_dir = Path("debug_images")
+                    debug_dir.mkdir(exist_ok=True)
+                    debug_path = debug_dir / f"cropped_{x1}_{y1}_{x2}_{y2}.png"
+                    cropped_img.save(debug_path)
+                    self.logger_for_agent_logs.info(f"IMPORTANT: Saved debug cropped image to {debug_path}")
+
+                    # Also save the original image for comparison
+                    orig_debug_path = debug_dir / f"original_{img.width}_{img.height}.png"
+                    img.save(orig_debug_path)
+                    self.logger_for_agent_logs.info(f"IMPORTANT: Saved original image to {orig_debug_path}")
                 else:
                     # Use the full image
+                    self.logger_for_agent_logs.info("IMPORTANT: No view coordinates set, using full image")
                     cropped_img = img
+                    # Log the size of the original image
+                    self.logger_for_agent_logs.info(f"IMPORTANT: Original image size: {img.size}")
 
                 # Convert to base64
                 buffered = BytesIO()
@@ -246,6 +287,7 @@ class DialogMessages:
 
                 # Use the cropped image URL
                 new_prompt.image_url = img_url
+                self.logger_for_agent_logs.info("Set image URL for prompt (base64 data omitted)")
 
                 # Store the image URL for future use
                 self.original_image = img_url
@@ -255,6 +297,7 @@ class DialogMessages:
                 # If we have a stored image URL, use it
                 if self.original_image:
                     new_prompt.image_url = self.original_image
+                    self.logger_for_agent_logs.info("Using stored image URL (base64 data omitted)")
 
         # Return a single message list with just this prompt
         return [[new_prompt]]
@@ -333,6 +376,7 @@ class DialogMessages:
         self.initial_question = None
         self.original_image = None
         self.original_image_path = None
+        self.current_image_path = None
         self.current_view_coordinates = None
         self.remembered_info = []
 

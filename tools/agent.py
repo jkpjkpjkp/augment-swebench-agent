@@ -220,6 +220,16 @@ try breaking down the task into smaller steps and call this tool multiple times.
                 # Get the messages to send to the model
                 messages = self.dialog.get_messages_for_llm_client()
 
+                # Log the current view coordinates before calling the model
+                self.logger_for_agent_logs.info(f"IMPORTANT: Before calling model - dialog.current_view_coordinates: {self.dialog.current_view_coordinates}")
+
+                # Check if the message contains an image
+                for message_list in messages:
+                    for message in message_list:
+                        if hasattr(message, 'image_url') and message.image_url:
+                            self.logger_for_agent_logs.info("IMPORTANT: Message contains an image URL")
+                            # We can't log the full URL as it's too large, but we can log that it exists
+
                 # Call the model
                 model_response, metadata = self.client.generate(
                     messages=messages,
@@ -389,27 +399,55 @@ try breaking down the task into smaller steps and call this tool multiple times.
                                 view_path = Path(path_match.group(1))
                                 self.last_image_path = view_path
 
+                                # Extract view coordinates from the tool result
+                                coords_match = re.search(r"Coordinates: \[(.*?)\]", tool_result)
+                                if coords_match:
+                                    try:
+                                        coords_str = coords_match.group(1)
+                                        coords = [int(x.strip()) for x in coords_str.split(",")]
+                                        if len(coords) == 4:
+                                            # Update the dialog's current view coordinates
+                                            self.dialog.current_view_coordinates = coords
+                                            print(f"Updated dialog.current_view_coordinates to {coords} from tool result")
+                                    except Exception as e:
+                                        print(f"Error parsing coordinates from tool result: {str(e)}")
+
                                 # Load the image and send it to the model
                                 try:
                                     # Use imports from the top of the file
 
-                                    # Load the image
-                                    img = Image.open(view_path)
+                                    # Load the original image
+                                    if hasattr(self, 'original_image_path') and self.original_image_path:
+                                        img = Image.open(self.original_image_path)
+                                    else:
+                                        # Fall back to the dialog's original image path
+                                        img = Image.open(self.dialog.original_image_path)
+
+                                    # Crop according to the current view coordinates
+                                    if self.dialog.current_view_coordinates:
+                                        x1, y1, x2, y2 = self.dialog.current_view_coordinates
+                                        # Crop the image
+                                        cropped_img = img.crop((x1, y1, x2, y2))
+                                        print(f"Cropped image with coordinates: {self.dialog.current_view_coordinates}")
+                                    else:
+                                        # Use the full image
+                                        cropped_img = img
+                                        print("No view coordinates set, using full image")
 
                                     # Crop to remove black regions
                                     from utils.image_utils import crop_to_remove_black_regions
-                                    img = crop_to_remove_black_regions(img)
+                                    cropped_img = crop_to_remove_black_regions(cropped_img)
 
                                     # Resize if needed
                                     max_size = (1500, 1500)
-                                    if img.width > max_size[0] or img.height > max_size[1]:
-                                        ratio = min(max_size[0] / img.width, max_size[1] / img.height)
-                                        new_size = (int(img.width * ratio), int(img.height * ratio))
-                                        img = img.resize(new_size, Image.LANCZOS)
+                                    if cropped_img.width > max_size[0] or cropped_img.height > max_size[1]:
+                                        ratio = min(max_size[0] / cropped_img.width, max_size[1] / cropped_img.height)
+                                        new_size = (int(cropped_img.width * ratio), int(cropped_img.height * ratio))
+                                        cropped_img = cropped_img.resize(new_size, Image.LANCZOS)
 
                                     # Convert to base64
                                     buffered = BytesIO()
-                                    img.save(buffered, format="PNG")
+                                    cropped_img.save(buffered, format="PNG")
                                     img_base64 = base64.b64encode(buffered.getvalue()).decode("utf-8")
                                     img_url = f"data:image/png;base64,{img_base64}"
                                     # Log a message without the full base64 string
@@ -447,27 +485,52 @@ try breaking down the task into smaller steps and call this tool multiple times.
                                 view_path = Path(path_match.group(2))
                                 self.last_image_path = view_path
 
+                                # Extract coordinates from the tool result if available
+                                coords_match = re.search(r"coordinates \[(.*?)\]", tool_result)
+                                if coords_match:
+                                    try:
+                                        coords_str = coords_match.group(1)
+                                        coords = [int(x.strip()) for x in coords_str.split(",")]
+                                        if len(coords) == 4:
+                                            # Update the dialog's current view coordinates
+                                            # Note: For blackout, we don't update the view coordinates
+                                            # as we're just marking a region as analyzed
+                                            print(f"Blackout applied to region at coordinates {coords}")
+                                    except Exception as e:
+                                        print(f"Error parsing coordinates from tool result: {str(e)}")
+
                                 # Load the image and send it to the model
                                 try:
                                     # Use imports from the top of the file
 
-                                    # Load the image
+                                    # Load the original image with blackout applied
                                     img = Image.open(view_path)
+
+                                    # Crop according to the current view coordinates
+                                    if self.dialog.current_view_coordinates:
+                                        x1, y1, x2, y2 = self.dialog.current_view_coordinates
+                                        # Crop the image
+                                        cropped_img = img.crop((x1, y1, x2, y2))
+                                        print(f"Cropped image with coordinates: {self.dialog.current_view_coordinates}")
+                                    else:
+                                        # Use the full image
+                                        cropped_img = img
+                                        print("No view coordinates set, using full image")
 
                                     # Crop to remove black regions
                                     from utils.image_utils import crop_to_remove_black_regions
-                                    img = crop_to_remove_black_regions(img)
+                                    cropped_img = crop_to_remove_black_regions(cropped_img)
 
                                     # Resize if needed
                                     max_size = (1500, 1500)
-                                    if img.width > max_size[0] or img.height > max_size[1]:
-                                        ratio = min(max_size[0] / img.width, max_size[1] / img.height)
-                                        new_size = (int(img.width * ratio), int(img.height * ratio))
-                                        img = img.resize(new_size, Image.LANCZOS)
+                                    if cropped_img.width > max_size[0] or cropped_img.height > max_size[1]:
+                                        ratio = min(max_size[0] / cropped_img.width, max_size[1] / cropped_img.height)
+                                        new_size = (int(cropped_img.width * ratio), int(cropped_img.height * ratio))
+                                        cropped_img = cropped_img.resize(new_size, Image.LANCZOS)
 
                                     # Convert to base64
                                     buffered = BytesIO()
-                                    img.save(buffered, format="PNG")
+                                    cropped_img.save(buffered, format="PNG")
                                     img_base64 = base64.b64encode(buffered.getvalue()).decode("utf-8")
                                     img_url = f"data:image/png;base64,{img_base64}"
                                     # Log a message without the full base64 string
@@ -692,6 +755,9 @@ try breaking down the task into smaller steps and call this tool multiple times.
                 self.original_image_path = initial_image_path
                 self.processed_images.add(str(initial_image_path))
 
+                # Set the image path in the dialog
+                self.dialog.original_image_path = initial_image_path
+
                 # Log the user message with the image
                 self.run_logger.log_user_message(instruction, image_path=initial_image_path)
 
@@ -913,11 +979,9 @@ try breaking down the task into smaller steps and call this tool multiple times.
                         if bbox_match:
                             bbox_values = [int(x.strip()) for x in bbox_match.group(1).split(",")]
                             if len(bbox_values) == 4:
+                                # Keep the bbox parameter as expected by the tool
                                 tool_input = {
-                                    "x1": bbox_values[0],
-                                    "y1": bbox_values[1],
-                                    "x2": bbox_values[2],
-                                    "y2": bbox_values[3]
+                                    "bbox": bbox_values
                                 }
 
                                 # If there's an image_path parameter, extract it

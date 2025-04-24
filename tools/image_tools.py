@@ -103,10 +103,17 @@ Example: To crop the top-left quarter of the image, use bbox=[0, 0, 500, 500]
         x1, y1, x2, y2 = bbox
         view_id = tool_input.get("view_id")
 
-        # Use the last selected image (currently displayed image)
-        if not hasattr(CropTool, "last_selected_image") or CropTool.last_selected_image is None:
-            # Try to find the last selected image from the image manager
-            images = self.image_manager.list_images()
+        # Use the image path from dialog_messages if available
+        if dialog_messages and dialog_messages.current_image_path:
+            image_path = dialog_messages.current_image_path
+            print(f"CropTool: Using image from dialog_messages: {image_path}")
+        # Fallback to the class variable for backward compatibility
+        elif hasattr(CropTool, "last_selected_image") and CropTool.last_selected_image is not None:
+            image_path = CropTool.last_selected_image
+            print(f"CropTool: Using image from class variable: {image_path}")
+        else:
+            # Try to find an image from the workspace manager
+            images = self.workspace_manager.list_images()
             if not images:
                 return ToolImplOutput(
                     tool_output="Error: No image has been selected yet. Use switch_image first.",
@@ -114,8 +121,7 @@ Example: To crop the top-left quarter of the image, use bbox=[0, 0, 500, 500]
                 )
             # Use the first image as a fallback
             image_path = images[0]
-        else:
-            image_path = CropTool.last_selected_image
+            print(f"CropTool: Using first available image: {image_path}")
 
         # Debug output
         print(f"CropTool: Using image: {image_path}, Bbox: {bbox}")
@@ -130,13 +136,16 @@ Example: To crop the top-left quarter of the image, use bbox=[0, 0, 500, 500]
 
             # Check if this is a view or an original image
             is_view = self.workspace_manager.is_view(image_path)
+            view_path = None
 
             if is_view:
-                # If it's a view, we need to find the original image and adjust coordinates
+                # It's a view, find the original image and adjust coordinates
+                view_found = False
                 for orig_path, views in self.workspace_manager.image_views.items():
                     for v_id, v in views.items():
                         if v.view_path == image_path or v.view_path.name == image_path.name:
                             # Found the view
+                            view_found = True
                             view_x1, view_y1, view_x2, view_y2 = v.coordinates
 
                             # Get the original image dimensions
@@ -170,10 +179,10 @@ Example: To crop the top-left quarter of the image, use bbox=[0, 0, 500, 500]
                                 orig_path, view_id, adjusted_coords
                             )
                             break
-                    else:
-                        continue
-                    break
-                else:
+                    if view_found:
+                        break
+
+                if not view_found:
                     return ToolImplOutput(
                         tool_output=f"Error: Could not find view information for {image_path}",
                         tool_result_message=f"Error: Could not find view information for {image_path}",
@@ -208,6 +217,13 @@ Example: To crop the top-left quarter of the image, use bbox=[0, 0, 500, 500]
 
             # Update the current view size
             CropTool.current_view_size = view_info['size']
+
+            # Update the dialog messages with the new view coordinates and path
+            if dialog_messages:
+                dialog_messages.current_view_coordinates = view_info['coordinates']
+                dialog_messages.current_image_path = view_path
+                print(f"Updated dialog_messages.current_view_coordinates to {view_info['coordinates']}")
+                print(f"Updated dialog_messages.current_image_path to {view_path}")
 
             return ToolImplOutput(
                 tool_output=f"Created new view with bounding box {bbox}\n"
@@ -409,6 +425,12 @@ After switching to an image, you can create views (crops) of specific regions us
                 # but don't include it in the tool output to avoid logging it
 
                 # Store the selected image path for use by other tools
+                # Update the dialog messages with the current image path
+                if dialog_messages:
+                    dialog_messages.current_image_path = image_path
+                    print(f"Updated dialog_messages.current_image_path to {image_path}")
+
+                # For backward compatibility, also update the class variables
                 CropTool.last_selected_image = image_path
                 BlackoutTool.last_selected_image = image_path
 
@@ -418,8 +440,13 @@ After switching to an image, you can create views (crops) of specific regions us
                 # If this is a view, set the current view coordinates
                 if is_view:
                     try:
-                        view_info = self.image_manager.get_view_info(image_path)
+                        view_info = self.workspace_manager.get_view_info(image_path)
                         CropTool.current_view_coords = view_info['coordinates']
+
+                        # Update the dialog messages with the new view coordinates
+                        if dialog_messages:
+                            dialog_messages.current_view_coordinates = view_info['coordinates']
+                            print(f"Updated dialog_messages.current_view_coordinates to {view_info['coordinates']}")
                     except Exception as e:
                         print(f"Warning: Could not set current view coordinates: {e}")
                 else:
@@ -427,11 +454,20 @@ After switching to an image, you can create views (crops) of specific regions us
                     if hasattr(CropTool, "current_view_coords"):
                         delattr(CropTool, "current_view_coords")
 
+                    # Reset the dialog messages view coordinates
+                    if dialog_messages:
+                        # Use the full image dimensions
+                        from PIL import Image
+                        img = Image.open(image_path)
+                        width, height = img.size
+                        dialog_messages.current_view_coordinates = [0, 0, width, height]
+                        print(f"Reset dialog_messages.current_view_coordinates to full image: {dialog_messages.current_view_coordinates}")
+
                 # Get the list of all available images for display
-                all_images = self.image_manager.list_images()
+                all_images = self.workspace_manager.list_images()
                 all_views = []
                 for img in all_images:
-                    views = self.image_manager.list_views(img)
+                    views = self.workspace_manager.list_views(img)
                     all_views.extend(views)
 
                 # Create a formatted list of all images, highlighting the current one
@@ -521,7 +557,7 @@ The smallest remaining view (with the least number of pixels) is identified for 
                 "description": "Optional Y coordinate of the bottom-right corner of the region to black out.",
             },
         },
-        "required": ["image_path"],
+        "required": [],
     }
 
     def __init__(self, workspace_manager: WorkspaceManager):
@@ -547,7 +583,26 @@ The smallest remaining view (with the least number of pixels) is identified for 
         Returns:
             ToolImplOutput containing the result of the operation
         """
-        image_path = tool_input["image_path"]
+        # Get the image path from the tool input or dialog messages
+        if "image_path" in tool_input:
+            image_path = tool_input["image_path"]
+        elif dialog_messages and dialog_messages.current_image_path:
+            image_path = dialog_messages.current_image_path
+            print(f"BlackoutTool: Using image from dialog_messages: {image_path}")
+        elif hasattr(BlackoutTool, "last_selected_image") and BlackoutTool.last_selected_image is not None:
+            image_path = BlackoutTool.last_selected_image
+            print(f"BlackoutTool: Using image from class variable: {image_path}")
+        else:
+            # Try to find an image from the workspace manager
+            images = self.workspace_manager.list_images()
+            if not images:
+                return ToolImplOutput(
+                    tool_output="Error: No image has been selected yet. Use switch_image first.",
+                    tool_result_message="Error: No image has been selected yet. Use switch_image first.",
+                )
+            # Use the first image as a fallback
+            image_path = images[0]
+            print(f"BlackoutTool: Using first available image: {image_path}")
 
         # Extract coordinates if provided
         x1 = tool_input.get("x1")
@@ -574,7 +629,7 @@ The smallest remaining view (with the least number of pixels) is identified for 
                 original_image_path = None
 
                 # Try to find by path or name
-                for img_path, views in self.image_manager.image_views.items():
+                for img_path, views in self.workspace_manager.image_views.items():
                     for v_id, v in views.items():
                         if str(v.view_path) == str(path_obj) or v.view_path.name == path_obj.name:
                             view_obj = v
@@ -623,6 +678,11 @@ The smallest remaining view (with the least number of pixels) is identified for 
 
                 # Blackout the region in the original image
                 self.workspace_manager.blackout_view(view_obj.view_path)
+
+                # Update the dialog messages to indicate this region has been analyzed
+                if dialog_messages:
+                    # We don't change the current view coordinates here, as we're just marking a region as analyzed
+                    print(f"Blackout applied to region at coordinates {coordinates}")
 
                 return ToolImplOutput(
                     tool_output=f"Blacked out region at coordinates {coordinates} in the original image",

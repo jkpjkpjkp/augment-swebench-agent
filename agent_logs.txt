@@ -1,0 +1,18 @@
+
+Agent is thinking...
+
+--------------------------------------------- USER INPUT ---------------------------------------------
+hi
+
+Stored initial question: hi
+
+No images found in the workspace.
+
+--------------------------------------------- NEW TURN ---------------------------------------------
+
+(Current token count: 12)
+
+Agent: Agent interrupted by user
+
+----------------------------------------
+

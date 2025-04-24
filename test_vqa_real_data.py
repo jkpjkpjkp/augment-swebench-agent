@@ -21,7 +21,6 @@ from rich.panel import Panel
 from tools.agent import Agent
 from utils.workspace_manager import WorkspaceManager
 from utils.llm_client import get_client
-from prompts.instruction import INSTRUCTION_PROMPT\
 
 def load_vqa_data(parquet_path, task_id='37_3'):
     """Load VQA data from a parquet file.
@@ -192,33 +191,21 @@ def main():
 
     # Create a simple instruction with the question
     instruction = f"""
-I've loaded an image for you to analyze. Consider the following question about the image:
+The question is: {task_data['question']}
 
-<question>
-{task_data['question']}
-</question>
-
-Can you help me analyze this image and answer the question?
-
-Your task is to thoroughly investigate the image to answer the question extremely accurately.
+Please analyze the image to answer this question accurately.
 
 Example steps:
-0. Zoom-in (cut away unrelated area)
-1. Divide complex images into multiple parts (ALWAYS a good idea)
-2. You may divide them into equal parts, or small, tight bounding boxes of objects of interest
-3. Analyze each view in detail and remember information related to the <question> in curly braces
+1. Divide the image into multiple parts
+2. Analyze each part in detail
+3. Remember important information in curly braces {{like this}}
 4. Mark regions as analyzed by blacking them out
-5. Only report a final answer when you are absolutely sure, based on your analysis.
-6. Only information in curly braces will be remembered between calls
+5. Only report a final answer when you are absolutely sure
 
 TIPS:
-- Zoom in by repeatedly cropping, until you have a very clear view of the region of interest
-- Create multiple crops to focus on different parts of the image
-- Examine the image section by section
-- Combine examinations and analyze
-- Be detailed in your descriptions of what you see in each view
-- But only report information relevant to the question
-- If you are done with a part, black it out before switching to another one. This helps you keep track of which parts of the image you have already analyzed.
+- Zoom in by cropping to focus on important areas
+- Count carefully and methodically
+- Black out regions after you've analyzed them
 """
 
     # Run the agent with the initial image
