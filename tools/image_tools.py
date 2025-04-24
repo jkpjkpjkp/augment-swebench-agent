@@ -592,7 +592,7 @@ The smallest remaining view (with the least number of pixels) is identified for 
                 # Handle original image blackout
                 img = load_image(image_path)
                 black_img = Image.new('RGB', img.size, (0, 0, 0))
-                save_image(black_img, image_path)
+                black_img.save(image_path)
 
                 # Update all related views
                 for view_id, view in self.image_manager.image_views.get(image_path, {}).items():
@@ -600,7 +600,7 @@ The smallest remaining view (with the least number of pixels) is identified for 
                         view.coordinates[2] - view.coordinates[0],
                         view.coordinates[3] - view.coordinates[1]
                     ), (0, 0, 0))
-                    save_image(black_view, view.view_path)
+                    black_view.save(view.view_path)
 
                 return ToolImplOutput(
                     tool_output=f"Blacked out image at {image_path}",

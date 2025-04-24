@@ -83,8 +83,6 @@ class DialogMessages:
         self.token_counter = ClaudeTokenCounter()
         self.use_prompt_budgeting = use_prompt_budgeting
         self.truncation_history_token_cts: list[int] = []
-        self.token_budget_to_trigger_truncation = 120_000
-        self.truncate_all_but_N = 3
         # Store remembered information from curly braces
         self.remembered_info: list[str] = []
 
@@ -177,32 +175,6 @@ class DialogMessages:
                 else:
                     raise ValueError(f"Unknown message type: {type(message)}")
         return total_tokens
-
-    def run_truncation_strategy(self) -> None:
-        """Truncate the dialog to reduce token count.
-
-        With the new memory approach, we don't need to truncate the dialog history
-        since we're only keeping the most recent messages and remembered information.
-
-        This method is kept for compatibility but doesn't do anything significant.
-        """
-        # We're already only keeping the most recent messages, so no need to truncate
-        # Just log that we're not doing anything
-        old_token_ct = self.count_tokens()
-        print(
-            colored(
-                f" [dialog_messages] No truncation needed with memory-based approach. Current token count: {old_token_ct}",
-                "yellow",
-            )
-        )
-
-        # Log to the agent logs as well
-        self.logger_for_agent_logs.info(
-            f"No truncation needed with memory-based approach. Current token count: {old_token_ct}"
-        )
-
-        # Add a 0 to the truncation history to maintain compatibility
-        self.truncation_history_token_cts.append(0)
 
     def get_messages_for_llm_client(self) -> LLMMessages:
         """Returns messages in the format the LM client expects.

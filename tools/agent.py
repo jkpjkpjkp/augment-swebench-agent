@@ -1,12 +1,9 @@
 from copy import deepcopy
 import logging
 import re
-from io import BytesIO
 from pathlib import Path
 from typing import Any, Optional
 
-import base64
-from PIL import Image
 from rich.console import Console
 
 from utils.common import (
@@ -55,10 +52,8 @@ try breaking down the task into smaller steps and call this tool multiple times.
         Returns:
             The system prompt with messages prepended if any
         """
-        # Replace the literal curly braces example with double braces to escape them during formatting
-        system_prompt_template = SYSTEM_PROMPT.replace("{important detail to remember}", "{{important detail to remember}}")
 
-        return system_prompt_template.format(
+        return SYSTEM_PROMPT.format(
             workspace_root=self.workspace_manager.root,
         )
 
@@ -190,8 +185,7 @@ try breaking down the task into smaller steps and call this tool multiple times.
     ) -> ToolImplOutput:
         instruction = tool_input["instruction"]
 
-        user_input_delimiter = "-" * 45 + " USER INPUT " + "-" * 45 + "\n" + instruction
-        self.logger_for_agent_logs.info(f"\n{user_input_delimiter}\n")
+        self.logger_for_agent_logs.info("\n" + "-" * 45 + " USER INPUT " + "-" * 45 + "\n" + instruction + "\n")
 
         # Get the simplified list of images for the VLM
         image_list = self.get_image_list(simplified=True)
@@ -263,8 +257,50 @@ try breaking down the task into smaller steps and call this tool multiple times.
                 # Handle tool calls
                 pending_tool_calls = self.dialog.get_pending_tool_calls()
 
+                # Check for tool calls in code blocks if no explicit tool calls were made
                 if len(pending_tool_calls) == 0:
-                    # No tools were called, so assume the task is complete
+                    # Extract tool calls from code blocks in the model's text response
+                    text_results = [item for item in model_response if isinstance(item, TextResult)]
+                    if text_results:
+                        self.logger_for_agent_logs.info(f"Checking for tool calls in text: {text_results[0].text[:200]}...")
+                        code_block_tool_calls = self._extract_tool_calls_from_code_blocks(text_results[0].text)
+                        if code_block_tool_calls:
+                            self.logger_for_agent_logs.info(f"Found code block tool calls: {[call.tool_name for call in code_block_tool_calls]}")
+                            for call in code_block_tool_calls:
+                                self.logger_for_agent_logs.info(f"Tool call details - Name: {call.tool_name}, Input: {call.tool_input}")
+                            pending_tool_calls = code_block_tool_calls
+
+                if len(pending_tool_calls) == 0:
+                    # No tools were called, so default to blackout tool if the original image is not all black
+                    if self.last_image_path:
+                        try:
+                            from PIL import Image
+                            import numpy as np
+
+                            # Check if the image is all black
+                            img = Image.open(self.last_image_path)
+                            img_array = np.array(img)
+                            if np.mean(img_array) < 1.0:  # Image is essentially all black
+                                # If image is all black, complete the task
+                                self.logger_for_agent_logs.info("[image is all black, completing task]")
+                                return ToolImplOutput(
+                                    tool_output=self.dialog.get_last_model_text_response(),
+                                    tool_result_message="Task completed",
+                                )
+                            else:
+                                # If image is not all black, use blackout tool
+                                self.logger_for_agent_logs.info("[no tools were called, defaulting to blackout tool]")
+                                blackout_tool = next(t for t in self.tools if t.name == "blackout_image")
+                                tool_input = {"image_path": str(self.last_image_path)}
+                                result = blackout_tool.run(tool_input, deepcopy(self.dialog))
+                                return ToolImplOutput(
+                                    tool_output=result,
+                                    tool_result_message="Applied blackout tool as default action",
+                                )
+                        except Exception as e:
+                            self.logger_for_agent_logs.info(f"[error checking image: {str(e)}]")
+
+                    # No image or error occurred, so assume the task is complete
                     self.logger_for_agent_logs.info("[no tools were called]")
                     return ToolImplOutput(
                         tool_output=self.dialog.get_last_model_text_response(),
@@ -367,7 +403,10 @@ try breaking down the task into smaller steps and call this tool multiple times.
 
                                 # Load the image and send it to the model
                                 try:
-                                    # Use imports from the top of the file
+                                    # Import modules inside the function to avoid scope issues
+                                    from PIL import Image
+                                    from io import BytesIO
+                                    import base64
 
                                     # Load the image
                                     img = Image.open(view_path)
@@ -425,7 +464,10 @@ try breaking down the task into smaller steps and call this tool multiple times.
 
                                 # Load the image and send it to the model
                                 try:
-                                    # Use imports from the top of the file
+                                    # Import modules inside the function to avoid scope issues
+                                    from PIL import Image
+                                    from io import BytesIO
+                                    import base64
 
                                     # Load the image
                                     img = Image.open(view_path)
@@ -624,7 +666,10 @@ try breaking down the task into smaller steps and call this tool multiple times.
         # If an initial image is provided, include it with the first message
         if initial_image_path is not None and not resume:
             try:
-                # Use imports from the top of the file
+                # Import modules inside the function to avoid scope issues
+                from PIL import Image
+                from io import BytesIO
+                import base64
 
                 # Load the image
                 img = Image.open(initial_image_path)
@@ -842,9 +887,120 @@ try breaking down the task into smaller steps and call this tool multiple times.
 
         raise ValueError(f"Cannot convert {value} to a numeric value")
 
+    def _extract_tool_calls_from_code_blocks(self, text: str) -> list:
+        """Extract tool calls from code blocks in the model's text response.
+
+        Args:
+            text: The model's text response
+
+        Returns:
+            A list of ToolCallParameters objects
+        """
+        from utils.common import ToolCallParameters
+        import re
+
+        # Find all code blocks with tool_code tag
+        code_block_pattern = r"```+tool_code\s*(.*?)\s*```+"
+        code_blocks = re.findall(code_block_pattern, text, re.DOTALL)
+
+        # Also try with just backticks if no tool_code blocks found
+        if not code_blocks:
+            self.logger_for_agent_logs.info("No tool_code blocks found, trying with regular code blocks")
+            code_block_pattern = r"```+\s*(.*?)\s*```+"
+            code_blocks = re.findall(code_block_pattern, text, re.DOTALL)
+
+        self.logger_for_agent_logs.info(f"Found {len(code_blocks)} code blocks")
+
+        if not code_blocks:
+            return []
+
+        tool_calls = []
+
+        for i, code_block in enumerate(code_blocks):
+            # Extract function name and arguments
+            try:
+                self.logger_for_agent_logs.info(f"Processing code block {i+1}: {code_block.strip()}")
+
+                # Parse the function call
+                function_pattern = r"(\w+)\((.*)\)"
+                match = re.match(function_pattern, code_block.strip())
+
+                if not match:
+                    self.logger_for_agent_logs.info(f"No function call pattern match in code block {i+1}")
+                    continue
+
+                # We have a match
+                function_name = match.group(1)
+                args_str = match.group(2)
+
+                # Parse the arguments
+                tool_input = {}
+
+                # Handle different argument formats
+                if function_name == "crop_image" and "bbox=" in args_str:
+                    # Handle bbox parameter for crop_image
+                    bbox_match = re.search(r"bbox=\[(.*?)\]", args_str)
+                    if bbox_match:
+                        bbox_values = [int(x.strip()) for x in bbox_match.group(1).split(",")]
+                        if len(bbox_values) == 4:
+                            # Keep the original bbox parameter
+                            tool_input = {
+                                "bbox": bbox_values
+                            }
+
+                            # If there's an image_path parameter, extract it
+                            image_path_match = re.search(r"image_path=['\"]?(.*?)['\"]?(?:,|\))", args_str)
+                            if image_path_match:
+                                tool_input["image_path"] = image_path_match.group(1)
+                else:
+                    # For other functions, try to parse the arguments as a Python dict
+                    try:
+                        # Add curly braces to make it a valid dict string
+                        dict_str = "{" + args_str + "}"
+                        # Replace any single quotes with double quotes for JSON compatibility
+                        dict_str = dict_str.replace("'", '"')
+                        # Parse the dict
+                        import json
+                        tool_input = json.loads(dict_str)
+                    except json.JSONDecodeError:
+                        # If that fails, try to parse individual key-value pairs
+                        for pair in args_str.split(","):
+                            if "=" in pair:
+                                key, value = pair.split("=", 1)
+                                key = key.strip()
+                                value = value.strip()
+
+                                # Try to convert value to appropriate type
+                                try:
+                                    # Remove quotes if present
+                                    if (value.startswith('"') and value.endswith('"')) or \
+                                       (value.startswith("'") and value.endswith("'")):
+                                        value = value[1:-1]
+                                    # Try to convert to int or float if appropriate
+                                    elif value.isdigit():
+                                        value = int(value)
+                                    elif value.replace(".", "", 1).isdigit():
+                                        value = float(value)
+                                except:
+                                    pass
+
+                                tool_input[key] = value
+
+                # Create a ToolCallParameters object
+                tool_call = ToolCallParameters(
+                    tool_call_id=f"code_block_{len(tool_calls)}",
+                    tool_name=function_name,
+                    tool_input=tool_input
+                )
+
+                tool_calls.append(tool_call)
+            except Exception as e:
+                self.logger_for_agent_logs.info(f"Error parsing code block: {str(e)}")
+
+        return tool_calls
+
     def clear(self):
         self.dialog.clear()
         self.interrupted = False
         self.last_image_path = None
         self.processed_images.clear()
-        self.recent_tool_calls.clear()

@@ -5,30 +5,6 @@ from typing import Optional, Tuple, Union
 import numpy as np
 from PIL import Image, ImageDraw
 
-def load_image(image_path: Path) -> Image.Image:
-    """Load an image from a file.
-
-    Args:
-        image_path: Path to the image file
-
-    Returns:
-        Loaded image
-    """
-    return Image.open(image_path)
-
-def save_image(image: Image.Image, output_path: Path) -> Path:
-    """Save an image to a file.
-
-    Args:
-        image: Image to save
-        output_path: Path where to save the image
-
-    Returns:
-        Path to the saved image
-    """
-    image.save(output_path)
-    return output_path
-
 def crop_image(
     image: Union[Image.Image, Path],
     coordinates: Tuple[int, int, int, int]
@@ -43,7 +19,7 @@ def crop_image(
         Cropped image
     """
     if isinstance(image, Path):
-        image = load_image(image)
+        image = Image.open(image)
 
     x1, y1, x2, y2 = coordinates
     return image.crop((x1, y1, x2, y2))
@@ -63,7 +39,7 @@ def blackout_region(
         Image with the region blacked out
     """
     if isinstance(image, Path):
-        image = load_image(image)
+        image = Image.open(image)
 
     # Create a copy of the image
     result = image.copy()
@@ -101,7 +77,7 @@ def highlight_region(
         Image with the highlighted region
     """
     if isinstance(image, Path):
-        image = load_image(image)
+        image = Image.open(image)
 
     # Create a copy of the image
     result = image.copy()
@@ -142,7 +118,7 @@ def crop_to_remove_black_regions(image: Union[Image.Image, Path], padding: int =
         Cropped image with black regions removed
     """
     if isinstance(image, Path):
-        image = load_image(image)
+        image = Image.open(image)
 
     # Convert to numpy array for faster processing
     img_array = np.array(image)

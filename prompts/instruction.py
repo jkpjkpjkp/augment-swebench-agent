@@ -15,7 +15,7 @@ Guidelines:
 - Use the crop tool liberally
 
 IMPORTANT MEMORY INSTRUCTION:
-- When you discover important information that you need to remember for later, put it in curly braces like this: {observations relevant to the question}
+- When you discover important information that you need to remember for later, put it in curly braces like this: {{observations relevant to the question}}
 - ONLY information in curly braces will be remembered between calls
 - Each time you analyze a new crop, you'll have access to the crop and the information you explicitly remembered within curly braces
 
